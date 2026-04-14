@@ -1,0 +1,24 @@
+# SystemC — Python dependencies
+# Install: pip install -r requirement.txt
+#
+# NOTE: MetaTrader5 is Windows-only (VPS).
+#       It is not available on macOS/Linux.
+#       All other packages install on all platforms.
+
+# ── MT5 bridge (Windows / VPS only) ─────────────────────────────────────────
+MetaTrader5>=5.0.0
+
+# ── Numerics + data ──────────────────────────────────────────────────────────
+numpy>=1.26.0
+pandas>=2.0.0
+numba>=0.59.0
+
+# ── Remote procedure call (rpyc mode) ────────────────────────────────────────
+rpyc>=4.1.5
+
+# ── HTTP (Telegram notifier) ─────────────────────────────────────────────────
+requests>=2.32.0
+
+# ── Config + env ─────────────────────────────────────────────────────────────
+PyYAML>=6.0.0
+python-dotenv>=1.0.0

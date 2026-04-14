@@ -1,0 +1,63 @@
+{
+  "_comment": "System C state file",
+  "_version": "1.0",
+
+  "open_trades": [],
+
+  "instrument_modes": {
+    "EURUSD": "live"
+  },
+
+  "instrument_highwind": {
+    "EURUSD": {
+      "window": [],
+      "halted": false,
+      "halt_time": null
+    }
+  },
+
+  "hypothesis_states": {
+    "EURUSD": {
+      "choch_confirmed": false,
+      "choch_direction": null,
+      "choch_level": null,
+      "in_cooldown": false,
+      "bars_since_sl": 0,
+      "new_extreme_flag": false,
+      "sb_used": false
+    }
+  },
+
+  "pivot_arrays": {
+    "EURUSD": []
+  },
+
+  "cb_anchor": {
+    "peak": null,
+    "anchor": null,
+    "triggered_session": false,
+    "last_trigger_time": null
+  },
+
+  "rule2": {
+    "base_equity": null,
+    "triggered_today": false,
+    "trigger_date": null
+  },
+
+  "last_bar_times": {
+    "EURUSD": {
+      "m15": null,
+      "h1": null
+    }
+  },
+
+  "session_state": {
+    "EURUSD": {
+      "session": null,
+      "session_bar": -1
+    }
+  },
+
+  "_reset_log": []
+}

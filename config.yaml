@@ -1,0 +1,340 @@
+# config.yaml — System C trade configuration
+# Safe to commit to git — no secrets here
+# Secrets (login, password, server) live in .env
+#
+# v1.0 · April 2026
+
+# ─────────────────────────────────────────
+# GLOBAL PAPER OVERRIDE
+# ─────────────────────────────────────────
+# true  = ALL instruments shadow-trade regardless of per-instrument mode
+# false = each instrument follows instruments.<SYMBOL>.mode
+#
+paper_mode: false
+
+# ─────────────────────────────────────────
+# STATE FILES — DO NOT MIX
+# ─────────────────────────────────────────
+# Bot selects automatically based on paper_mode.
+# Two completely separate state files.
+# Never share state between global-paper and live modes.
+#
+state_file_paper: state_paper.json
+state_file_live:  state_live.json
+
+# ─────────────────────────────────────────
+# TIMEFRAMES
+# ─────────────────────────────────────────
+entry_timeframe:   M15      # hypothesis trigger + entry bar
+context_timeframe: H1       # 1H ST direction, regime group
+
+# ─────────────────────────────────────────
+# SUPERTREND DEFAULTS (both TFs)
+# ─────────────────────────────────────────
+# Same params on both timeframes — validated EURUSD config.
+# Override per-instrument under instruments.<SYM>.overrides if needed.
+# e.g. GBPUSD A1: st_period=11, st_multiplier=2.0
+#
+st_period:     12
+st_multiplier: 3.0
+
+# ─────────────────────────────────────────
+# SESSIONS (UTC hours, half-open intervals)
+# ─────────────────────────────────────────
+# London end = 16:00 (full London session, wider than SystemB's [7,13])
+# Asia: A1 compression context is tracked (00:00–07:00) but no trade execution
+#
+sessions:
+  London: [7, 16]
+  NY:     [13, 21]
+  Asia:   [0, 7]    # A1 context only — no execution
+
+# ─────────────────────────────────────────
+# 1H STABILITY GATE
+# ─────────────────────────────────────────
+# Min consecutive 1H bars in same ST direction before trading allowed.
+# Prevents entries during 1H ST transition / flip.
+#
+stable_bars_1h: 3
+
+# ─────────────────────────────────────────
+# COOLDOWN (bar-based)
+# ─────────────────────────────────────────
+# Activated ONLY after SL hit — not after TP, timeout, or manual close.
+# Resets per ST flip (sb_used, new_extreme_flag).
+# 6 active-session bars (London/NY only — Asian bars not counted).
+# Wall-clock duration varies: ~90 min mid-session, potentially longer if spanning Asian hours.
+#
+cooldown_bars: 6
+
+# ─────────────────────────────────────────
+# PIVOT ARRAY
+# ─────────────────────────────────────────
+# Max confirmed swing highs/lows retained per instrument.
+# Older pivots are dropped when limit exceeded.
+#
+pivot_maxlen: 8
+
+# ─────────────────────────────────────────
+# GLOBAL HYPOTHESIS DEFAULTS
+# ─────────────────────────────────────────
+# Applied to ALL instruments unless overridden in instruments.<SYM>.overrides.
+# config_loader.get_hyp_config(symbol, "a1") merges global + instrument override.
+
+# ── Hypothesis A1 — ST Compression Bounce ────────────────
+#
+# Context: ST line stepped ≥ 2× since last flip (trend has momentum).
+# Trigger: EMA touch with clean approach + EMA3 trajectory + RSI gate (V2).
+# SL: clamp(|EMA_touch - ST_line|, sl_min, sl_max)  — pocket width.
+# TP: 1.5R
+#
+hyp_a1:
+  enabled:        true
+  st_min_steps:   2           # ST must change value ≥ 2× since last flip
+  ema_touch_span: 20          # EMA span used as bounce target (EMA20 for EURUSD)
+  ema_traj_span:  3           # EMA3 trajectory filter span
+  rsi_period:     30
+  rsi_bull_gate:  55.0        # RSI > 55 required for long entries
+  rsi_bear_gate:  48.0        # RSI < 48 required for short entries
+  touch_epsilon:  0.0003      # 3 pip tolerance for EMA touch check
+  sl_min:         0.0012      # 12 pip SL floor (pocket width clamp low)
+  sl_max:         0.0020      # 20 pip SL cap  (pocket width clamp high)
+  rr:             1.5
+  # V6 regime gate — regimes where A1 is suppressed entirely.
+  # A2 does NOT re-evaluate on the same bar when A1 is blocked.
+  # blocked_regimes is instrument-specific. Set per-instrument under overrides.
+  # Run V5 regime profiling per new instrument before setting its block list.
+  blocked_regimes: []
+
+# ── Hypothesis A2 — Pivot Retracement (Premium-Discount) ─
+#
+# Context: ST flip confirmed pivot, OF 4/2 gate passes.
+# Trigger: new extreme set + price retraces into 61.8% discount zone.
+# SL: clamp(|entry - last_pivot| + epsilon, sl_min, sl_max)
+# TP: 1.5R
+#
+hyp_a2:
+  enabled:    true
+  pd_level:   0.618           # 61.8% retracement threshold for discount zone
+  of_depth:   4               # last N pivots to check in OF gate (lax 4/2)
+  of_min:     2               # min sequential pairs required (lax 4/2)
+  sl_min:     0.0015          # 15 pip SL floor
+  sl_max:     0.0020          # 20 pip SL cap
+  sl_epsilon: 0.0003          # 3 pip buffer beyond confirmed pivot
+  rr:         1.5
+
+# ── Hypothesis B — ChoCh Structural Break ─────────────────
+#
+# Context: ChoCh confirmed (price closed beyond last swing extreme,
+#          opposing entry TF but aligning with 1H).
+# Trigger: structural break beyond last confirmed swing level.
+#          (Touch trigger deliberately omitted — tested PF 0.854–0.97)
+# SL: fixed 20 pips.  TP: 2.0R.
+# Direction: always aligned with 1H ST (never a pullback trade).
+#
+hyp_b:
+  enabled:  true
+  sl_fixed: 0.0020            # fixed 20 pip SL for ChoCh volatility
+  rr:       2.0
+
+# ─────────────────────────────────────────
+# 7-REGIME CLASSIFIER
+# ─────────────────────────────────────────
+# Two-layer: 1H EMA crossover → BULLISH/BEARISH group.
+#            15m ATR ratio + RSI30 → sub-state within group.
+# Fallthrough → UNKNOWN (hold previous regime, suppress new opens).
+#
+# Sub-states:
+#   BULLISH group: ACCUMULATION | BULLISH | RECOVERY
+#   BEARISH group: DISTRIBUTION | BEARISH | CORRECTION
+#
+regime:
+  # 1H EMA — group assignment (BULLISH / BEARISH)
+  ema_fast_1h:      50        # ~50H memory (~2 days)
+  ema_slow_1h:      200       # ~200H memory (~8.3 days)
+  ema_confirm_bars: 3         # 1H EMA flip must hold N bars before group changes
+
+  # 15m EMA — sub-state reference only (not used for group assignment)
+  ema_fast_15m:     20
+  ema_slow_15m:     60
+
+  # ATR ratio thresholds  (ATR_short / ATR_long; periods 10 and 50)
+  atr_short:    10            # short ATR period (5× spread for dynamic range)
+  atr_long:     50
+  atr_compress: 1.0           # ATR parity — below = compressed vol, above = expanding
+  atr_expand:   1.3           # p89 — meaningful vol expansion
+  atr_spike:    1.5           # p97 — panic / spike events only
+
+  # RSI (15m, period 30)  — 7.5H smoothing, momentum not trend
+  rsi_period:     30
+  rsi_correction: 40.0        # RSI < 40         → CORRECTION (genuine panic)
+  rsi_bear_band:  48.0        # RSI 40–48         → BEARISH (bear market floor)
+  rsi_neutral_hi: 55.0        # RSI 48–55         → ACCUMULATION (neutral zone)
+  rsi_bull_band:  55.0        # RSI > 55          → BULLISH (strong momentum)
+  rsi_dist_entry: 60.0        # RSI > 60 + div ↓  → DISTRIBUTION (overbought)
+
+# ─────────────────────────────────────────
+# RISK MANAGEMENT
+# ─────────────────────────────────────────
+base_risk_pct: 1.0            # % of equity per trade at full size (fixed — no Highwind sizing)
+max_hold_bars: 32             # 32 × 15m = 8H timeout close
+
+cb_anchor:
+  trigger_pct:      0.08      # 8% DD from rolling peak → skip session
+  recovery_buffer:  0.97      # anchor = peak × 0.97
+  next_trigger_pct: 0.92      # next trigger = anchor × 0.92
+
+rule2:
+  floor_pct: 0.85             # equity ≤ base × 0.85 → stop trading for the day
+
+# ─────────────────────────────────────────
+# HIGHWIND (per-instrument auto-shadow)
+# ─────────────────────────────────────────
+# Tracks rolling overall WR per instrument across ALL hypotheses combined.
+# (SystemB tracked per-direction; SystemC tracks per-instrument only.)
+# Auto-shadows instrument when WR drops below halt_threshold.
+# Restore manually: python3 status.py --live EURUSD
+#
+highwind:
+  window:          30         # rolling last N trades per instrument (30 = statistically meaningful)
+  halt_threshold:  0.32       # WR < 32% → HALT: instrument switches to shadow mode
+  l2_threshold:    0.36       # WR < 36% → L2 (50% risk) — near/at break-even
+  l1_threshold:    0.40       # WR < 40% → L1 (75% risk) — below EURUSD study WR 39.6%
+  # HALT recovery: auto via shadow trading — shadow trades count toward WR window.
+  #   WR ≥ l1_threshold while in HALT → step up to L2 + restore live mode automatically.
+  #   status.py --live SYMBOL: force-restore shortcut (reseeds window, sets L1).
+  # Step-up (L2→L1→NORMAL): auto when WR ≥ l1_threshold (one level per confirmed window).
+  # Per-instrument thresholds override these globals under instruments.<SYM>.highwind.
+  size_mult:
+    NORMAL: 1.00
+    L1:     0.75
+    L2:     0.50
+    HALT:   0.00              # trade skipped entirely (shadow mode active)
+
+# ─────────────────────────────────────────
+# ORDER IDENTIFICATION
+# ─────────────────────────────────────────
+magic_number: 20260414        # all System C orders tagged with this
+                              # format: YYYYMMDD of system creation
+                              # allows coexistence with other EAs
+
+# comment field format: SysC-{symbol}-{session}-{hypothesis}-{regime[:8]}
+# e.g. "SysC-EURUSD-London-A2-BULLISH", "SysC-EURUSD-NY-B-BEARISH"
+# regime label truncated to 8 chars to stay within MT5's 31-char limit
+
+# ─────────────────────────────────────────
+# TRAILING STOP
+# ─────────────────────────────────────────
+# Deferred — not yet validated for any hypothesis
+trail:
+  enabled: false
+
+# ─────────────────────────────────────────
+# DATA
+# ─────────────────────────────────────────
+bars_to_pull_15m:  400        # EWM ATR_long(50) converges at 228 bars; 400 = 1.75× margin
+                              # lowered from 2000 (was a TradingView debug artefact)
+bars_running_15m:  250        # subsequent 15m bar closes; raised from 200 to clear ATR_long(50) threshold
+bars_to_pull_1h:   500        # EMA200 convergence requires ~460 1H bars; 500 is minimum
+bars_running_1h:   500        # MUST match bars_to_pull_1h — correctness fix
+                              # 100-bar EMA200 had 36.8% initial condition bleed → wrong regime group
+poll_interval_seconds: 5      # seconds between MT5 polls
+
+# ─────────────────────────────────────────
+# LOGGING
+# ─────────────────────────────────────────
+logging:
+  trade_log:  logs/trades_{YYYYMM}.csv
+  event_log:  logs/events_{YYYYMM}.csv
+  signal_log: logs/signals_replay.csv
+  rotate: monthly             # new file each month
+
+# ═════════════════════════════════════════════════════════
+# INSTRUMENTS
+# ═════════════════════════════════════════════════════════
+# Each instrument inherits ALL global hypothesis defaults above.
+# Override only what differs under overrides:
+#
+#   overrides.hyp_a1: {enabled: false}                → disable A1
+#   overrides.hyp_a1: {ema_touch_span: 30}            → EMA30 touch for A1
+#   overrides.hyp_a1: {blocked_regimes: [BEARISH]}    → tighter gate
+#
+# Mode:
+#   live     = real orders placed
+#   paper    = shadow trade (full pipeline, fake tickets, no real orders)
+#   disabled = instrument skipped entirely (no signal detection)
+#
+# config_loader.get_hyp_config(symbol, "a1") merges:
+#   global hyp_a1 defaults  ←  instruments.<SYM>.overrides.hyp_a1
+# ═════════════════════════════════════════════════════════
+instruments:
+
+  EURUSD:
+    mode: live
+    pip_size: 0.0001
+    trading_hours: [7, 21]     # London + NY (07:00–21:00 UTC)
+    # Highwind: global thresholds apply (calibrated to EURUSD). Seeds from study WR 39.6%.
+    highwind:
+      seed_wins:   12           # 12/30 = 40.0% → NORMAL at start
+      seed_losses: 18
+    # All hypotheses active with EURUSD-validated parameters.
+    overrides:
+      hyp_a1:
+        blocked_regimes:
+          - BEARISH
+          - ACCUMULATION
+          - UNKNOWN       # warmup / EWM not yet converged
+
+  # ── GBPUSD — study concluded 2026-04-14 ──────────────────────────────────
+  # Deploy: B + A2 only. A1 deferred — no viable V6 regime gate.
+  # SL wider than EURUSD: ADR ~95 pip vs ~70 pip. B=25pip, A2 max=25pip.
+  # Performance: PF 1.0596, 1,359 trades (7yr). B PF 1.0646, A2 PF 1.0495.
+  # See instruments-study/systemC-GBPUSD.md for full study.
+  #
+  GBPUSD:
+    mode: disabled            # set to paper when ready to shadow-trade
+    pip_size: 0.0001
+    trading_hours: [7, 21]   # London + NY (07:00–21:00 UTC)
+    # Highwind: tighter thresholds (break-even 35.4%, study WR ~37%). Seeds at L1.
+    highwind:
+      halt_threshold: 0.31   # WR < 31% → HALT
+      l2_threshold:   0.35   # WR < 35% → L2
+      l1_threshold:   0.37   # WR < 37% → L1 (below study WR ~37%)
+      seed_wins:      11     # 11/30 = 36.7% → L1 at start
+      seed_losses:    19
+    overrides:
+      hyp_a1:
+        enabled: false        # deferred — no viable regime gate (V5 study: only DISTRIBUTION passes, n=155)
+      hyp_a2:
+        sl_max: 0.0025        # 25 pip cap (wider ADR; global default is 20 pip)
+      hyp_b:
+        sl_fixed: 0.0025      # 25 pip fixed (wider ADR; global default is 20 pip)
+
+  # ── GBPJPY — study concluded 2026-04-14, opt2 (A1 only) ─────────────────
+  # Deploy: A1 V2 only. A2 dropped (PF 0.808). B dropped (PF 1.010 — drag).
+  # Session: Asian + London + Ldn/NY (00:00–17:00 UTC). NY 17–21 excluded.
+  # SL in GBPJPY pip terms (pip_size=0.01): sl_min=0.15 (15p), sl_max=0.25 (25p).
+  # No regime gate needed — A1 V2 sufficient standalone (PF 1.1778).
+  # Performance: PF 1.1778, 1,521 trades (7yr), WR 44.0%, MaxDD 24.5R.
+  # See instruments-study/systemC-GBPJPY-opt2.md for full study.
+  #
+  GBPJPY:
+    mode: disabled            # set to paper when ready to shadow-trade
+    pip_size: 0.01
+    trading_hours: [0, 17]   # Asian + London + Ldn/NY (00:00–17:00 UTC); NY 17–21 excluded
+    # Highwind: higher thresholds (A1 only, RR=1.5, break-even 40%, study WR 44%). Seeds at L1.
+    highwind:
+      halt_threshold: 0.36   # WR < 36% → HALT
+      l2_threshold:   0.40   # WR < 40% → L2
+      l1_threshold:   0.44   # WR < 44% → L1 (below study WR 44.0%)
+      seed_wins:      13     # 13/30 = 43.3% → L1 at start
+      seed_losses:    17
+    overrides:
+      hyp_a2:
+        enabled: false        # no viable gate on GBPJPY (PF 0.808 — structural drain)
+      hyp_b:
+        enabled: false        # break-even passenger (PF 1.010); dropped for quality
+      hyp_a1:
+        blocked_regimes: []   # no regime gate needed — V2 sufficient as-is
+        sl_min: 0.15          # 15 pip floor in GBPJPY pip terms (0.01 × 15)
+        sl_max: 0.25          # 25 pip cap
