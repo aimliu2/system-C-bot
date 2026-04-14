@@ -239,6 +239,7 @@ bars_to_pull_1h:   500        # EMA200 convergence requires ~460 1H bars; 500 is
 bars_running_1h:   500        # MUST match bars_to_pull_1h — correctness fix
                               # 100-bar EMA200 had 36.8% initial condition bleed → wrong regime group
 poll_interval_seconds: 5      # seconds between MT5 polls
+heartbeat_minutes:     15     # terminal alive print interval (0 = disabled)
 
 # ─────────────────────────────────────────
 # LOGGING

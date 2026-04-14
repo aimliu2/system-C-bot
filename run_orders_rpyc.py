@@ -152,6 +152,30 @@ def _hw_seed_entry(symbol: str) -> dict:
     return {"window": window, "level": level, "halt_since": None}
 
 
+def print_guards_status(state: dict):
+    """Print CB and Rule 2 armed status to terminal. Called at every startup."""
+    cb     = state.get("cb_anchor", {})
+    r2     = state.get("rule2", {})
+    cfg_cb = config.get("cb_anchor", {})
+    peak   = cb.get("peak")
+    anchor = cb.get("anchor")
+    trig   = round(anchor * cfg_cb.get("next_trigger_pct", 0.92), 2) if anchor else None
+    armed  = "✅ ARMED" if peak else "⚠️  NOT ARMED"
+    base   = r2.get("base_equity")
+    floor_ = round(base * config.get("rule2", {}).get("floor_pct", 0.85), 2) if base else None
+
+    print(f"\n  ── Guards ──────────────────────────────────")
+    print(f"  CB      : {armed}")
+    if peak:
+        print(f"            peak   = ${peak:,.2f}")
+        print(f"            anchor = ${anchor:,.2f}  (×{cfg_cb.get('recovery_buffer', 0.97)})")
+        print(f"            trigger= ${trig:,.2f}  ← CB fires here")
+    if base:
+        print(f"  Rule 2  : base   = ${base:,.2f}")
+        print(f"            floor  = ${floor_:,.2f}  ← trading stops here")
+    print(f"  ────────────────────────────────────────────\n")
+
+
 def ensure_symbol_state(state: dict, symbol: str):
     """
     Initialize all per-symbol state dicts for a newly added instrument.
@@ -1621,6 +1645,7 @@ def main():
     # Init CB and Rule 2
     cb_init(state)
     r2_init(state)
+    print_guards_status(state)
     save_state(state, state_path)
 
     # Initial data pull
@@ -1645,6 +1670,8 @@ def main():
 
     idle_mode          = False
     poll_secs          = config.get("poll_interval_seconds", 5)
+    _hb_mins           = config.get("heartbeat_minutes", 15)
+    _last_hb           = datetime.now(timezone.utc).replace(tzinfo=None)
     reconnect_attempts = 0
 
     while True:
@@ -1666,6 +1693,23 @@ def main():
                 continue
 
             time.sleep(poll_secs)
+
+            # ── Heartbeat ────────────────────────────────────────────────────
+            if _hb_mins > 0:
+                _now = datetime.now(timezone.utc).replace(tzinfo=None)
+                if (_now - _last_hb).total_seconds() >= _hb_mins * 60:
+                    _last_hb = _now
+                    _eq      = mt5.account_info().equity
+                    _cb      = state.get("cb_anchor", {})
+                    _trig    = (round(_cb["anchor"] * config["cb_anchor"].get("next_trigger_pct", 0.92), 2)
+                                if _cb.get("anchor") else None)
+                    _n_open  = len(state.get("open_trades", []))
+                    _ihw     = state.get("instrument_highwind", {})
+                    _hw_str  = "  ".join(f"{s}:{_ihw.get(s, {}).get('level', '?')}"
+                                         for s in active_symbols)
+                    _cb_str  = f"CB trig=${_trig:,.0f}" if _trig else "CB unarmed"
+                    print(f"  [{_now.strftime('%H:%M')} UTC] ALIVE  "
+                          f"eq=${_eq:,.2f}  {_cb_str}  open={_n_open}  {_hw_str}")
 
             for sym in active_symbols:
                 mode = get_instrument_mode_rt(sym, state)
