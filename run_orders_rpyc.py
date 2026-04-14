@@ -1151,9 +1151,9 @@ def get_filling_mode(symbol: str) -> int:
     if info is None:
         return mt5.ORDER_FILLING_FOK
     fm = int(info.filling_mode)
-    if fm & int(mt5.SYMBOL_FILLING_FOK):   # bit 0 = FOK supported
+    if fm & 1:   # bit 0 = FOK supported (SYMBOL_FILLING_FOK=1, not in Python API)
         return mt5.ORDER_FILLING_FOK
-    if fm & int(mt5.SYMBOL_FILLING_IOC):   # bit 1 = IOC supported
+    if fm & 2:   # bit 1 = IOC supported (SYMBOL_FILLING_IOC=2, not in Python API)
         return mt5.ORDER_FILLING_IOC
     return mt5.ORDER_FILLING_RETURN        # fm==0 → RETURN only
 
