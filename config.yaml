@@ -292,7 +292,7 @@ instruments:
   # See instruments-study/systemC-GBPUSD.md for full study.
   #
   GBPUSD:
-    mode: disabled            # set to paper when ready to shadow-trade
+    mode: paper            # set to paper when ready to shadow-trade
     pip_size: 0.0001
     trading_hours: [7, 21]   # London + NY (07:00–21:00 UTC)
     # Highwind: tighter thresholds (break-even 35.4%, study WR ~37%). Seeds at L1.
@@ -319,7 +319,7 @@ instruments:
   # See instruments-study/systemC-GBPJPY-opt2.md for full study.
   #
   GBPJPY:
-    mode: disabled            # set to paper when ready to shadow-trade
+    mode: live            # set to paper when ready to shadow-trade
     pip_size: 0.01
     trading_hours: [0, 17]   # Asian + London + Ldn/NY (00:00–17:00 UTC); NY 17–21 excluded
     # Highwind: higher thresholds (A1 only, RR=1.5, break-even 40%, study WR 44%). Seeds at L1.

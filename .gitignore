@@ -3,6 +3,7 @@ __pycache__/
 *.py[codz]
 *$py.class
 docs/*
+start_bridge.sh
 
 # C extensions
 *.so

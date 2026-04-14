@@ -94,6 +94,35 @@ def _hw_seed_entry(symbol: str) -> dict:
     return {"window": window, "level": level, "halt_since": None}
 
 
+def ensure_symbol_state(state: dict, symbol: str):
+    """
+    Initialize all per-symbol state dicts for a newly added instrument.
+    Idempotent — setdefault never overwrites existing data.
+    Must be called at startup whenever a symbol is promoted from disabled → paper/live
+    after the state file was first created (fresh_state only runs once).
+    """
+    state.setdefault("last_bar_times", {}).setdefault(
+        symbol, {"m15": None, "h1": None})
+    state.setdefault("session_state", {}).setdefault(
+        symbol, {"session": None, "session_bar": -1})
+    state.setdefault("london_session_summary", {}).setdefault(
+        symbol, {"trades": 0, "wins": 0, "pnl_r": 0.0})
+    state.setdefault("ny_session_summary", {}).setdefault(
+        symbol, {"trades": 0, "wins": 0, "pnl_r": 0.0})
+    state.setdefault("pivot_arrays", {}).setdefault(symbol, [])
+    state.setdefault("hypothesis_states", {}).setdefault(symbol, {
+        "choch_confirmed" : False,
+        "choch_direction" : None,
+        "choch_level"     : None,
+        "in_cooldown"     : False,
+        "bars_since_sl"   : 0,
+        "new_extreme_flag": False,
+        "sb_used"         : False,
+    })
+    state.setdefault("instrument_modes", {}).setdefault(
+        symbol, config.get("instruments", {}).get(symbol, {}).get("mode", "paper"))
+
+
 def ensure_highwind_ready(state: dict, symbol: str):
     """Migrate old binary structure and seed empty windows on first run or new instrument."""
     ihw   = state.setdefault("instrument_highwind", {})
@@ -1538,8 +1567,9 @@ def main():
     state_path = get_state_file()
     state      = load_state(state_path)
 
-    # Migrate + seed Highwind for all active symbols
+    # Migrate + seed state dicts for all active symbols (handles new instruments)
     for sym in active_symbols:
+        ensure_symbol_state(state, sym)
         ensure_highwind_ready(state, sym)
 
     # Startup recovery
