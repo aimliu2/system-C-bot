@@ -1134,20 +1134,28 @@ def compute_lot_size(symbol: str, sl_price: float, entry_price: float,
 def get_filling_mode(symbol: str) -> int:
     """
     Auto-detect broker filling mode for symbol.
-    Tests FOK → RETURN → IOC in order (FOK first — broker preference).
-    rpyc: ORDER_FILLING_* constants accessed via remote module.
+
+    IMPORTANT: info.filling_mode is a bitmask using SYMBOL_FILLING_* values:
+      SYMBOL_FILLING_FOK = 1  (bit 0)
+      SYMBOL_FILLING_IOC = 2  (bit 1)
+      neither bit set (fm==0) → RETURN only
+
+    ORDER_FILLING_* are separate constants used in the order request:
+      ORDER_FILLING_FOK    = 0
+      ORDER_FILLING_IOC    = 1
+      ORDER_FILLING_RETURN = 2
+
+    rpyc: int() casts required for proxy object comparison.
     """
     info = mt5.symbol_info(symbol)
     if info is None:
         return mt5.ORDER_FILLING_FOK
     fm = int(info.filling_mode)
-    if fm & int(mt5.ORDER_FILLING_FOK):
+    if fm & int(mt5.SYMBOL_FILLING_FOK):   # bit 0 = FOK supported
         return mt5.ORDER_FILLING_FOK
-    if fm & int(mt5.ORDER_FILLING_RETURN):
-        return mt5.ORDER_FILLING_RETURN
-    if fm & int(mt5.ORDER_FILLING_IOC):
+    if fm & int(mt5.SYMBOL_FILLING_IOC):   # bit 1 = IOC supported
         return mt5.ORDER_FILLING_IOC
-    return mt5.ORDER_FILLING_FOK
+    return mt5.ORDER_FILLING_RETURN        # fm==0 → RETURN only
 
 
 # ---------------------------------------------------------------------------
