@@ -74,8 +74,17 @@ def get_hyp_config(symbol: str, hyp: str) -> dict:
 
 
 def get_active_symbols() -> list:
-    """Return symbols where mode != 'disabled'."""
+    """Return launch symbols where mode != 'disabled'.
+
+    deployment_symbols is an optional hard allow-list for staged launches.
+    It prevents a symbol from becoming active just because its instrument mode
+    was accidentally left as paper/live in config.yaml.
+    """
     instruments = config.get("instruments", {})
+    deployment_symbols = config.get("deployment_symbols")
+    if deployment_symbols:
+        allowed = set(deployment_symbols)
+        instruments = {sym: cfg for sym, cfg in instruments.items() if sym in allowed}
     return [sym for sym, cfg in instruments.items()
             if cfg.get("mode", "disabled") != "disabled"]
 
@@ -178,6 +187,11 @@ def validate_config():
     instruments = config.get("instruments", {})
     if not instruments:
         errors.append("instruments section is empty — at least one instrument required")
+
+    deployment_symbols = config.get("deployment_symbols") or []
+    for symbol in deployment_symbols:
+        if symbol not in instruments:
+            errors.append(f"deployment_symbols includes {symbol}, but instruments.{symbol} is missing")
 
     for symbol, inst_cfg in instruments.items():
         if inst_cfg.get("mode", "disabled") == "disabled":

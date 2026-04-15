@@ -12,6 +12,11 @@
 #
 paper_mode: false
 
+# Staged launch allow-list. Only symbols in this list can become active even
+# if an instrument section is accidentally left in paper/live mode.
+deployment_symbols:
+  - EURUSD
+
 # ─────────────────────────────────────────
 # STATE FILES — DO NOT MIX
 # ─────────────────────────────────────────
@@ -100,10 +105,10 @@ hyp_a1:
   sl_min:         0.0012      # 12 pip SL floor (pocket width clamp low)
   sl_max:         0.0020      # 20 pip SL cap  (pocket width clamp high)
   rr:             1.5
-  # V6 regime gate — regimes where A1 is suppressed entirely.
-  # A2 does NOT re-evaluate on the same bar when A1 is blocked.
+  # Optional A1 regime gate — regimes where A1 is suppressed entirely.
+  # A1/A2 priority is resolved only after same-bar triggers fire.
   # blocked_regimes is instrument-specific. Set per-instrument under overrides.
-  # Run V5 regime profiling per new instrument before setting its block list.
+  # EURUSD production launch disables A1 and runs A2+B only.
   blocked_regimes: []
 
 # ── Hypothesis A2 — Pivot Retracement (Premium-Discount) ─
@@ -190,16 +195,19 @@ rule2:
 # ─────────────────────────────────────────
 # HIGHWIND (per-instrument auto-shadow)
 # ─────────────────────────────────────────
-# Tracks rolling overall WR per instrument across ALL hypotheses combined.
+# Tracks rolling overall WR per instrument across ALL active hypotheses combined.
 # (SystemB tracked per-direction; SystemC tracks per-instrument only.)
 # Auto-shadows instrument when WR drops below halt_threshold.
 # Restore manually: python3 status.py --live EURUSD
 #
+# EURUSD launch calibration uses A2+B only:
+#   study WR=39.27%, avg win=1.7932R, breakeven WR≈35.8%.
+#   NORMAL threshold set at 38% (about +2.2pp above breakeven).
 highwind:
   window:          30         # rolling last N trades per instrument (30 = statistically meaningful)
-  halt_threshold:  0.32       # WR < 32% → HALT: instrument switches to shadow mode
+  halt_threshold:  0.33       # WR < 33% → HALT: instrument switches to shadow mode
   l2_threshold:    0.36       # WR < 36% → L2 (50% risk) — near/at break-even
-  l1_threshold:    0.40       # WR < 40% → L1 (75% risk) — below EURUSD study WR 39.6%
+  l1_threshold:    0.38       # WR < 38% → L1 (75% risk); WR ≥38% → NORMAL/step-up
   # HALT recovery: auto via shadow trading — shadow trades count toward WR window.
   #   WR ≥ l1_threshold while in HALT → step up to L2 + restore live mode automatically.
   #   status.py --live SYMBOL: force-restore shortcut (reseeds window, sets L1).
@@ -274,17 +282,14 @@ instruments:
     mode: live
     pip_size: 0.0001
     trading_hours: [7, 21]     # London + NY (07:00–21:00 UTC)
-    # Highwind: global thresholds apply (calibrated to EURUSD). Seeds from study WR 39.6%.
+    # Highwind: global thresholds apply (calibrated to EURUSD A2+B). Seeds from study WR 39.27%.
     highwind:
       seed_wins:   12           # 12/30 = 40.0% → NORMAL at start
       seed_losses: 18
-    # All hypotheses active with EURUSD-validated parameters.
+    # Production launch: A2+B only. A1 remains research/nice-to-have.
     overrides:
       hyp_a1:
-        blocked_regimes:
-          - BEARISH
-          - ACCUMULATION
-          - UNKNOWN       # warmup / EWM not yet converged
+        enabled: false
 
   # ── GBPUSD — study concluded 2026-04-14 ──────────────────────────────────
   # Deploy: B + A2 only. A1 deferred — no viable V6 regime gate.
@@ -293,7 +298,7 @@ instruments:
   # See instruments-study/systemC-GBPUSD.md for full study.
   #
   GBPUSD:
-    mode: paper            # set to paper when ready to shadow-trade
+    mode: disabled         # one-symbol EURUSD launch
     pip_size: 0.0001
     trading_hours: [7, 21]   # London + NY (07:00–21:00 UTC)
     # Highwind: tighter thresholds (break-even 35.4%, study WR ~37%). Seeds at L1.
@@ -320,7 +325,7 @@ instruments:
   # See instruments-study/systemC-GBPJPY-opt2.md for full study.
   #
   GBPJPY:
-    mode: live            # set to paper when ready to shadow-trade
+    mode: disabled        # one-symbol EURUSD launch
     pip_size: 0.01
     trading_hours: [0, 17]   # Asian + London + Ldn/NY (00:00–17:00 UTC); NY 17–21 excluded
     # Highwind: higher thresholds (A1 only, RR=1.5, break-even 40%, study WR 44%). Seeds at L1.

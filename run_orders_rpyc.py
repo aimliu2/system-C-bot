@@ -536,6 +536,10 @@ def cd_reassess(state: dict, symbol: str, st_1h_dir: int, bar_close: float) -> s
 def pa_add_pivot(state: dict, symbol: str, pivot_type: str,
                  price: float, time_str: str):
     """Add confirmed swing pivot to state. Trim to pivot_maxlen."""
+    if pivot_type == "H":
+        pivot_type = "high"
+    elif pivot_type == "L":
+        pivot_type = "low"
     arr = state["pivot_arrays"].setdefault(symbol, [])
     arr.append({"type": pivot_type, "price": price, "time": time_str})
     maxlen = config.get("pivot_maxlen", 8)
@@ -545,14 +549,14 @@ def pa_add_pivot(state: dict, symbol: str, pivot_type: str,
 
 def pa_last_high(state: dict, symbol: str) -> float | None:
     for p in reversed(state["pivot_arrays"].get(symbol, [])):
-        if p["type"] == "H":
+        if p["type"] in ("high", "H"):
             return p["price"]
     return None
 
 
 def pa_last_low(state: dict, symbol: str) -> float | None:
     for p in reversed(state["pivot_arrays"].get(symbol, [])):
-        if p["type"] == "L":
+        if p["type"] in ("low", "L"):
             return p["price"]
     return None
 
@@ -651,12 +655,13 @@ def hyp_a2_of_gate(state: dict, symbol: str, direction: str,
     Lax 4/2 Order Flow gate: last of_depth pivots contain ≥ of_min
     sequential higher-highs + higher-lows (bull) or lower-lows + lower-highs (bear).
     """
-    depth  = a2_cfg.get("of_depth", 4)
-    min_ok = a2_cfg.get("of_min", 2)
-    arr    = state["pivot_arrays"].get(symbol, [])[-depth:]
+    depth = a2_cfg.get("of_depth", 4)
+    arr = state["pivot_arrays"].get(symbol, [])[-depth:]
+    if len(arr) < a2_cfg.get("of_min", 2):
+        return False
 
-    highs = [p["price"] for p in arr if p["type"] == "H"]
-    lows  = [p["price"] for p in arr if p["type"] == "L"]
+    highs = [p["price"] for p in arr if p["type"] in ("high", "H")]
+    lows  = [p["price"] for p in arr if p["type"] in ("low", "L")]
 
     if len(highs) < 2 or len(lows) < 2:
         return False
@@ -664,11 +669,11 @@ def hyp_a2_of_gate(state: dict, symbol: str, direction: str,
     if direction == "long":
         hh_pairs = sum(1 for i in range(1, len(highs)) if highs[i] > highs[i - 1])
         hl_pairs = sum(1 for i in range(1, len(lows))  if lows[i]  > lows[i - 1])
-        return hh_pairs >= min_ok and hl_pairs >= min_ok
+        return hh_pairs >= 1 and hl_pairs >= 1
     else:
         ll_pairs = sum(1 for i in range(1, len(lows))  if lows[i]  < lows[i - 1])
         lh_pairs = sum(1 for i in range(1, len(highs)) if highs[i] < highs[i - 1])
-        return ll_pairs >= min_ok and lh_pairs >= min_ok
+        return ll_pairs >= 1 and lh_pairs >= 1
 
 
 def calculate_pd_levels(state: dict, symbol: str, direction: str,
@@ -821,6 +826,11 @@ def hyp_b_trigger(bar_close: float, state: dict, symbol: str,
 def classify_hypothesis(state: dict, symbol: str, df_15m, df_1h,
                         bar_idx: int, st_1h_dir: int) -> tuple:
     """
+    Legacy context-only classifier.
+
+    Execution uses trigger-first dispatch in detect_signal() instead, so A1/A2
+    priority is applied only when signals fire on the same bar.
+
     Returns (hypothesis: str|None, direction: str|None, allow_stack: bool).
 
     Priority:
@@ -886,6 +896,32 @@ def classify_hypothesis(state: dict, symbol: str, df_15m, df_1h,
     if a1_valid:
         return ("A1", entry_dir_a1, True)
 
+    return (None, None, False)
+
+
+def resolve_a1_a2_priority(a1_fired: bool, a1_dir: str,
+                           a2_fired: bool, a2_dir: str,
+                           trend_dir: str) -> tuple:
+    """
+    Resolve A1/A2 only after their current-bar triggers fire.
+
+    This keeps A1 context from pre-empting A2. The priority table is still used,
+    but only for real same-bar signal conflicts.
+    """
+    if a1_fired and a2_fired:
+        if a1_dir == a2_dir:
+            return ("A1", a1_dir, False)
+        a1_aligned = (a1_dir == trend_dir)
+        a2_aligned = (a2_dir == trend_dir)
+        if a1_aligned and not a2_aligned:
+            return ("A1", a1_dir, False)
+        if a2_aligned and not a1_aligned:
+            return ("A2", a2_dir, False)
+        return (None, None, False)
+    if a2_fired:
+        return ("A2", a2_dir, True)
+    if a1_fired:
+        return ("A1", a1_dir, True)
     return (None, None, False)
 
 
@@ -1001,67 +1037,84 @@ def detect_signal(state: dict, symbol: str, bundle: DataBundle,
             _log_signal_replay(symbol, bar, None, None, None, False, skip_reason, df_1h)
             return None
 
-    # Step 4: Pullback filter removed — A1 pullback gate moved into classify_hypothesis()
+    # Step 4: Pullback filter removed — A1 pullback gate is handled during trigger-first dispatch.
     # (A1 invalid when entry_dir_a1 ≠ trend_dir_1h; A2 uses 1H direction so it can
     #  fire in the 1H direction even when 15m is counter-trend)
 
-    # Step 5: classify_hypothesis()
-    result = classify_hypothesis(state, symbol, df_15m, df_1h, bar_idx, st_1h_dir)
-    hyp, direction, allow_stack = result
-
-    if hyp is None:
-        skip_reason = "NO_HYP_VALID"
-        _log_signal_replay(symbol, bar, hyp, direction, None, False, skip_reason, df_1h)
-        return None
-
-    # Step 6: V6 Regime gate (A1 only)
-    if hyp == "A1":
-        a1_cfg          = get_hyp_config(symbol, "a1")
-        blocked_regimes = a1_cfg.get("blocked_regimes", [])
-        if bar_regime in blocked_regimes:
-            skip_reason = "REGIME_GATE_BLOCKED"
-            _log_signal_replay(symbol, bar, hyp, direction, allow_stack, False, skip_reason, df_1h)
+    # Step 5: Trigger-first hypothesis dispatch.
+    # B keeps top priority, matching the phase2-rework A2+B baseline.
+    hyp = direction = None
+    allow_stack = False
+    b_cfg = get_hyp_config(symbol, "b")
+    hs = state["hypothesis_states"][symbol]
+    if b_cfg.get("enabled", True) and hs.get("choch_confirmed"):
+        b_dir_int = hs.get("choch_direction", st_1h_dir)
+        direction = "long" if b_dir_int == 1 else "short"
+        if not is_choch_valid(float(bar["close"]), state, symbol):
+            hs["choch_confirmed"] = False
+            skip_reason = "CHOCH_INVALIDATED"
+            _log_signal_replay(symbol, bar, "B", direction, allow_stack, False, skip_reason, df_1h)
+            return None
+        if hyp_b_trigger(float(bar["close"]), state, symbol, direction):
+            hyp = "B"
+            allow_stack = False
+        else:
+            skip_reason = "TRIGGER_NOT_MET"
+            _log_signal_replay(symbol, bar, "B", direction, allow_stack, False, skip_reason, df_1h)
             return None
 
-    # Step 7: Trigger check
-    trigger_fired = False
+    # A1/A2 priority is resolved only among triggers that actually fired on this bar.
     touch_allowed = len([t for t in state.get("open_trades", []) if t["symbol"] == symbol]) == 0  # A1 flicker suppression — per symbol
 
-    if hyp == "A1":
+    if hyp is None:
+        trend_dir_1h = "long" if st_1h_dir == 1 else "short"
+        entry_dir_a1 = "long" if st_15m_dir == 1 else "short"
+        a2_dir = trend_dir_1h
+
+        a1_fired = False
         a1_cfg = get_hyp_config(symbol, "a1")
-        ema_t  = df_15m["ema_touch"].values
-        ema_tr = df_15m["ema_traj"].values
-        trigger_fired = hyp_a1_trigger(
-            bar_low        = float(bar["low"]),
-            bar_high       = float(bar["high"]),
-            ema_touch_i    = float(ema_t[bar_idx]),
-            ema_touch_prev = float(ema_t[bar_idx - 1]) if bar_idx > 0 else float(ema_t[bar_idx]),
-            close_prev     = float(df_15m["close"].iloc[bar_idx - 1]) if bar_idx > 0 else 0,
-            rsi_i          = float(bar["rsi"]),
-            ema_traj_vals  = ema_tr,
-            idx            = bar_idx,
-            direction      = direction,
-            touch_allowed  = touch_allowed,
-            a1_cfg         = a1_cfg,
+        blocked_regimes = a1_cfg.get("blocked_regimes", [])
+        if (
+            a1_cfg.get("enabled", True)
+            and bar_regime not in blocked_regimes
+            and entry_dir_a1 == trend_dir_1h
+            and is_a1_context(
+                df_15m["st_line"].values,
+                df_15m["st_direction"].values,
+                bar_idx,
+                entry_dir_a1,
+                a1_cfg.get("st_min_steps", 2),
+            )
+        ):
+            ema_t = df_15m["ema_touch"].values
+            ema_tr = df_15m["ema_traj"].values
+            a1_fired = hyp_a1_trigger(
+                bar_low=float(bar["low"]),
+                bar_high=float(bar["high"]),
+                ema_touch_i=float(ema_t[bar_idx]),
+                ema_touch_prev=float(ema_t[bar_idx - 1]) if bar_idx > 0 else float(ema_t[bar_idx]),
+                close_prev=float(df_15m["close"].iloc[bar_idx - 1]) if bar_idx > 0 else 0,
+                rsi_i=float(bar["rsi"]),
+                ema_traj_vals=ema_tr,
+                idx=bar_idx,
+                direction=entry_dir_a1,
+                touch_allowed=touch_allowed,
+                a1_cfg=a1_cfg,
+            )
+
+        a2_fired = False
+        a2_cfg = get_hyp_config(symbol, "a2")
+        if a2_cfg.get("enabled", True) and hyp_a2_of_gate(state, symbol, a2_dir, a2_cfg):
+            track_new_extreme(float(bar["close"]), state, symbol, a2_dir)
+            a2_fired = hyp_a2_trigger(float(bar["close"]), state, symbol, a2_dir, a2_cfg)
+
+        hyp, direction, allow_stack = resolve_a1_a2_priority(
+            a1_fired, entry_dir_a1, a2_fired, a2_dir, trend_dir_1h
         )
-
-    elif hyp == "A2":
-        track_new_extreme(float(bar["close"]), state, symbol, direction)
-        a2_cfg        = get_hyp_config(symbol, "a2")
-        trigger_fired = hyp_a2_trigger(float(bar["close"]), state, symbol, direction, a2_cfg)
-
-    elif hyp == "B":
-        if not is_choch_valid(float(bar["close"]), state, symbol):
-            state["hypothesis_states"][symbol]["choch_confirmed"] = False
-            skip_reason = "CHOCH_INVALIDATED"
-            _log_signal_replay(symbol, bar, hyp, direction, allow_stack, False, skip_reason, df_1h)
+        if hyp is None:
+            skip_reason = "TRIGGER_NOT_MET"
+            _log_signal_replay(symbol, bar, hyp, direction, None, False, skip_reason, df_1h)
             return None
-        trigger_fired = hyp_b_trigger(float(bar["close"]), state, symbol, direction)
-
-    if not trigger_fired:
-        skip_reason = "TRIGGER_NOT_MET"
-        _log_signal_replay(symbol, bar, hyp, direction, allow_stack, False, skip_reason, df_1h)
-        return None
 
     # Step 8: Stack check — filter to this symbol only (prevent cross-symbol suppression)
     sym_open = [t for t in state.get("open_trades", []) if t["symbol"] == symbol]
