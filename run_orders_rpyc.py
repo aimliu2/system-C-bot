@@ -845,24 +845,26 @@ def classify_hypothesis(state: dict, symbol: str, df_15m, df_1h,
     if b_cfg.get("enabled", True) and hs.get("choch_confirmed"):
         b_dir_int = hs.get("choch_direction", st_1h_dir)
         b_dir     = "long" if b_dir_int == 1 else "short"
-        return ("B", b_dir, None)
+        return ("B", b_dir, False)
 
-    # Determine A1 eligibility
+    trend_dir_1h = "long" if st_1h_dir == 1 else "short"
+
+    # Determine A1 eligibility (trend-following only — A1 never fires counter-1H)
     min_steps = a1_cfg.get("st_min_steps", 2)
     a1_valid  = (
         a1_cfg.get("enabled", True)
         and is_a1_context(st_lines, st_dirs, bar_idx, entry_dir_a1, min_steps)
+        and (entry_dir_a1 == trend_dir_1h)
     )
 
-    # Determine A2 eligibility
-    a2_of_dir = entry_dir_a1
+    # Determine A2 eligibility (A2 direction = 1H direction, independent of 15m ST)
+    a2_of_dir = trend_dir_1h
     a2_valid  = (
         a2_cfg.get("enabled", True)
         and hyp_a2_of_gate(state, symbol, a2_of_dir, a2_cfg)
     )
 
-    trend_dir_1h = "long" if st_1h_dir == 1 else "short"
-    a2_dir       = a2_of_dir
+    a2_dir = a2_of_dir
 
     # Priority 2: Conflict resolution (both valid)
     if a1_valid and a2_valid:
@@ -999,11 +1001,9 @@ def detect_signal(state: dict, symbol: str, bundle: DataBundle,
             _log_signal_replay(symbol, bar, None, None, None, False, skip_reason, df_1h)
             return None
 
-    # Step 4: Pullback filter
-    if st_15m_dir != st_1h_dir:
-        skip_reason = "PULLBACK_SKIP"
-        _log_signal_replay(symbol, bar, None, None, None, False, skip_reason, df_1h)
-        return None
+    # Step 4: Pullback filter removed — A1 pullback gate moved into classify_hypothesis()
+    # (A1 invalid when entry_dir_a1 ≠ trend_dir_1h; A2 uses 1H direction so it can
+    #  fire in the 1H direction even when 15m is counter-trend)
 
     # Step 5: classify_hypothesis()
     result = classify_hypothesis(state, symbol, df_15m, df_1h, bar_idx, st_1h_dir)
