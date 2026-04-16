@@ -141,6 +141,12 @@ Prepared the codebase for AUDUSD London+NY Phase 6 `A2-only` paper deployment.
   - Updated config summary to print entry/context TFs.
 - Updated `run_data.py`:
   - Entry/context bar pulls now use configured timeframes instead of hardcoded `M15/H1`.
+  - Renamed bar pull count config to entry/context terms:
+    - `bars_to_pull_entry`
+    - `bars_running_entry`
+    - `bars_to_pull_context`
+    - `bars_running_context`
+  - Preserved legacy fallback support for the old `bars_to_pull_15m` / `bars_to_pull_1h` keys.
   - Added generic context indicator path while preserving `df_1h` compatibility aliases.
   - Regime classifier now forward-fills configured context bars onto entry bars.
 - Updated `run_orders_vps.py` and `run_orders_rpyc.py`:

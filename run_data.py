@@ -515,15 +515,19 @@ def build_data_bundle(mt5, symbol: str, is_startup: bool,
     """
     entry_tf = get_timeframe_config(symbol, "entry")
     context_tf = get_timeframe_config(symbol, "context")
-    n_15m = config["bars_to_pull_15m"] if is_startup else config["bars_running_15m"]
-    n_1h  = config["bars_to_pull_1h"]  if is_startup else config["bars_running_1h"]
+    if is_startup:
+        n_entry = config.get("bars_to_pull_entry", config.get("bars_to_pull_15m", 400))
+        n_ctx   = config.get("bars_to_pull_context", config.get("bars_to_pull_1h", 500))
+    else:
+        n_entry = config.get("bars_running_entry", config.get("bars_running_15m", 250))
+        n_ctx   = config.get("bars_running_context", config.get("bars_running_1h", 500))
 
     if rpyc_mode:
-        df_15m = pull_bars_rpyc(mt5, symbol, entry_tf, n_15m)
-        df_1h  = pull_bars_rpyc(mt5, symbol, context_tf, n_1h)
+        df_15m = pull_bars_rpyc(mt5, symbol, entry_tf, n_entry)
+        df_1h  = pull_bars_rpyc(mt5, symbol, context_tf, n_ctx)
     else:
-        df_15m = pull_bars(mt5, symbol, entry_tf, n_15m)
-        df_1h  = pull_bars(mt5, symbol, context_tf, n_1h)
+        df_15m = pull_bars(mt5, symbol, entry_tf, n_entry)
+        df_1h  = pull_bars(mt5, symbol, context_tf, n_ctx)
 
     df_15m = add_entry_indicators(df_15m, symbol)
     df_1h  = add_context_indicators(df_1h, symbol)

@@ -260,11 +260,11 @@ trail:
 # ─────────────────────────────────────────
 # DATA
 # ─────────────────────────────────────────
-bars_to_pull_15m:  400        # EWM ATR_long(50) converges at 228 bars; 400 = 1.75× margin
+bars_to_pull_entry:    400    # EWM ATR_long(50) converges at 228 entry bars; 400 = 1.75× margin
                               # lowered from 2000 (was a TradingView debug artefact)
-bars_running_15m:  250        # subsequent 15m bar closes; raised from 200 to clear ATR_long(50) threshold
-bars_to_pull_1h:   500        # EMA200 convergence requires ~460 1H bars; 500 is minimum
-bars_running_1h:   500        # MUST match bars_to_pull_1h — correctness fix
+bars_running_entry:    250    # subsequent entry bars; raised from 200 to clear ATR_long(50) threshold
+bars_to_pull_context:  500    # EMA200 convergence requires ~460 context bars; 500 is minimum
+bars_running_context:  500    # MUST match bars_to_pull_context — correctness fix
                               # 100-bar EMA200 had 36.8% initial condition bleed → wrong regime group
 poll_interval_seconds: 5      # seconds between MT5 polls
 heartbeat_minutes:     15     # terminal alive print interval (0 = disabled)
