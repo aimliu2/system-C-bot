@@ -928,7 +928,8 @@ def get_tp(entry_price: float, sl_price: float, hypothesis: str,
 # ---------------------------------------------------------------------------
 
 def can_stack(hypothesis: str, allow_stack_flag: bool,
-              open_trades: list, direction: str) -> bool:
+              open_trades: list, direction: str,
+              max_stack: int | None = None) -> bool:
     if hypothesis == "B":
         # B: same-direction stacking only
         if not open_trades:
@@ -936,9 +937,13 @@ def can_stack(hypothesis: str, allow_stack_flag: bool,
         return all(t["direction"].lower() == direction for t in open_trades)
     if not allow_stack_flag:
         return False
-    if not open_trades:
+    if not all(t["direction"].lower() == direction for t in open_trades):
+        return False
+    if max_stack is None:
         return True
-    return all(t["direction"].lower() == direction for t in open_trades)
+    same_hyp = [t for t in open_trades
+                if t.get("hypothesis") == hypothesis]
+    return len(same_hyp) < int(max_stack)
 
 
 # ---------------------------------------------------------------------------
@@ -993,13 +998,6 @@ def detect_signal(state: dict, symbol: str, bundle: DataBundle,
     trend_dir_1h = "long" if st_1h_dir == 1 else "short"
     entry_dir_15m = "long" if st_15m_dir == 1 else "short"
 
-    # Step 4: No-countertrend contract. Phase studies assume entries only when
-    # entry-TF direction aligns with context direction unless explicitly enabled.
-    if not countertrend_enabled(symbol) and entry_dir_15m != trend_dir_1h:
-        skip_reason = "COUNTERTREND_BLOCKED"
-        _log_signal_replay(symbol, bar, None, None, None, False, skip_reason, df_1h)
-        return None
-
     # Step 5: Trigger-first hypothesis dispatch.
     # B keeps top priority, matching the phase2-rework A2+B baseline.
     hyp = direction = None
@@ -1021,6 +1019,14 @@ def detect_signal(state: dict, symbol: str, bundle: DataBundle,
             skip_reason = "TRIGGER_NOT_MET"
             _log_signal_replay(symbol, bar, "B", direction, allow_stack, False, skip_reason, df_1h)
             return None
+
+    # Step 4: No-countertrend contract. Phase studies assume A1/A2 entries only
+    # when entry-TF direction aligns with context direction unless explicitly
+    # enabled. B is checked above because its ChoCh setup starts from a pullback.
+    if hyp is None and not countertrend_enabled(symbol) and entry_dir_15m != trend_dir_1h:
+        skip_reason = "COUNTERTREND_BLOCKED"
+        _log_signal_replay(symbol, bar, None, None, None, False, skip_reason, df_1h)
+        return None
 
     # A1/A2 priority is resolved only among triggers that actually fired on this bar.
     touch_allowed = len([t for t in state.get("open_trades", []) if t["symbol"] == symbol]) == 0  # A1 flicker suppression — per symbol
@@ -1076,7 +1082,9 @@ def detect_signal(state: dict, symbol: str, bundle: DataBundle,
 
     # Step 8: Stack check — filter to this symbol only (prevent cross-symbol suppression)
     sym_open = [t for t in state.get("open_trades", []) if t["symbol"] == symbol]
-    if not can_stack(hyp, allow_stack, sym_open, direction):
+    stack_cfg = get_hyp_config(symbol, hyp.lower())
+    if not can_stack(hyp, allow_stack, sym_open, direction,
+                     stack_cfg.get("max_stack")):
         skip_reason = "STACK_BLOCKED"
         _log_signal_replay(symbol, bar, hyp, direction, allow_stack, False, skip_reason, df_1h)
         return None

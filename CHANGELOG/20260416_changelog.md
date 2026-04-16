@@ -73,6 +73,40 @@ Prepared the System C bot codebase for GBPJPY Phase 5 `A1+A2+B` shadow deploymen
 - Verified fractional window shorthand:
   - `[[0,7], [11], [13,21]]` resolves to `[(0,7), (11,12), (13,21)]`.
 
+## Post-Audit Execution Fixes
+
+Applied technical adversary-audit fixes for GBPJPY Phase 5 and EURUSD live execution.
+
+### Configuration
+
+- Added explicit A2 same-direction stacking cap:
+  - `hyp_a2.max_stack: 99`
+  - Preserves study-supported pyramiding behavior while making the cap configurable.
+
+### Code
+
+- Updated `config_loader.py`:
+  - Added validation for optional hypothesis `max_stack`.
+  - Validation now rejects non-integer or `< 1` stack caps cleanly.
+- Updated `run_orders_vps.py`:
+  - Moved B/ChoCh dispatch ahead of the no-countertrend alignment gate.
+  - B now keeps its intended pullback/ChoCh exception while A1/A2 remain gated by 15m/1H alignment.
+  - Added configurable same-hypothesis stack-cap enforcement via effective hypothesis config.
+- Updated `run_orders_rpyc.py`:
+  - Mirrored the VPS B/ChoCh dispatch ordering fix.
+  - Mirrored configurable same-hypothesis stack-cap enforcement.
+
+### Validation
+
+- Config validation passed:
+  - `python3 config_loader.py`
+- Syntax check passed for:
+  - `config_loader.py`
+  - `run_orders_vps.py`
+  - `run_orders_rpyc.py`
+- Diff whitespace check passed:
+  - `git diff --check`
+
 ### Remaining Work
 
 - Add a bot-side historical replay harness that executes the same live strategy logic against historical GBPJPY data.

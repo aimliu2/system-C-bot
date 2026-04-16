@@ -138,6 +138,7 @@ hyp_a1:
 #
 hyp_a2:
   enabled:    true
+  max_stack:  99             # explicit high cap for study-supported same-direction pyramiding
   pd_level:   0.618           # 61.8% retracement threshold for discount zone
   of_depth:   4               # last N pivots to check in OF gate (lax 4/2)
   of_min:     2               # min sequential pairs required (lax 4/2)

@@ -281,6 +281,13 @@ def validate_config():
                 rr = hyp_cfg.get("rr", 0)
                 if rr <= 0:
                     errors.append(f"instruments.{symbol}.hyp_{hyp}: rr must be > 0, got {rr}")
+                max_stack = hyp_cfg.get("max_stack")
+                if max_stack is not None:
+                    try:
+                        if int(max_stack) < 1:
+                            errors.append(f"instruments.{symbol}.hyp_{hyp}: max_stack must be >= 1, got {max_stack}")
+                    except (TypeError, ValueError):
+                        errors.append(f"instruments.{symbol}.hyp_{hyp}: max_stack must be an integer, got {max_stack}")
                 sl_min = hyp_cfg.get("sl_min", 0)
                 sl_max = hyp_cfg.get("sl_max", 0)
                 if sl_min >= sl_max:
