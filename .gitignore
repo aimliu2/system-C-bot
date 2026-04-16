@@ -4,6 +4,8 @@ __pycache__/
 *$py.class
 docs/*
 start_bridge.sh
+logs/*
+*.json
 
 # C extensions
 *.so
