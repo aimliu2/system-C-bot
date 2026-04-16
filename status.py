@@ -84,7 +84,7 @@ def _fresh_state(symbols: list, cfg: dict = None) -> dict:
                                  "triggered_session": False, "last_trigger_time": None},
         "rule2"               : {"base_equity": None, "triggered_today": False,
                                  "trigger_date": None},
-        "last_bar_times"      : {s: {"m15": None, "h1": None} for s in symbols},
+        "last_bar_times"      : {s: {"m15": None, "h1": None, "entry": None, "context": None} for s in symbols},
         "session_state"       : {s: {"session": None, "session_bar": -1} for s in symbols},
         "london_session_summary": {s: {"trades": 0, "wins": 0, "pnl_r": 0.0} for s in symbols},
         "ny_session_summary"    : {s: {"trades": 0, "wins": 0, "pnl_r": 0.0} for s in symbols},
@@ -215,7 +215,7 @@ def display(state: dict, state_file: str, mode_label: str, cfg: dict):
 
     # ── Instrument Modes + Highwind ──────────────────────────────────────────
     print(f"\n{BOLD}Instrument Modes + Highwind{RESET}  (rolling WR per instrument)")
-    print(f"  {'Symbol':<8} {'Mode':<10} {'WR(W20)':>8}  {'Bar':^20}  N  Status")
+    print(f"  {'Symbol':<8} {'Mode':<10} {'WR':>8}  {'Bar':^20}  N  Status")
     print(f"  {'─'*62}")
 
     inst_modes = state.get("instrument_modes", {})
@@ -368,11 +368,14 @@ def display(state: dict, state_file: str, mode_label: str, cfg: dict):
     for sym in symbols:
         lt  = last_times.get(sym, {})
         ss  = sess_state.get(sym, {})
-        m15 = lt.get("m15", "N/A")
-        h1  = lt.get("h1",  "N/A")
+        inst_tf = cfg.get("instruments", {}).get(sym, {}).get("timeframes", {}) or {}
+        entry_tf = str(inst_tf.get("entry", cfg.get("entry_timeframe", "M15"))).upper()
+        context_tf = str(inst_tf.get("context", cfg.get("context_timeframe", "H1"))).upper()
+        entry_time = lt.get("entry", lt.get("m15", "N/A"))
+        context_time = lt.get("context", lt.get("h1", "N/A"))
         ses = ss.get("session", "N/A")
         bar = ss.get("session_bar", -1)
-        print(f"  {sym:<8}  15m: {m15}  |  1H: {h1}")
+        print(f"  {sym:<8}  {entry_tf}: {entry_time}  |  {context_tf}: {context_time}")
         print(f"  {'':8}  Session: {ses}  bar {bar}")
 
     print(f"\n{'═'*62}\n")

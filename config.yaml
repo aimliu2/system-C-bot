@@ -17,6 +17,7 @@ paper_mode: false
 deployment_symbols:
   - EURUSD
   - GBPJPY
+  - AUDUSD
 
 # ─────────────────────────────────────────
 # STATE FILES — DO NOT MIX
@@ -32,7 +33,7 @@ state_file_live:  state_live.json
 # TIMEFRAMES
 # ─────────────────────────────────────────
 entry_timeframe:   M15      # hypothesis trigger + entry bar
-context_timeframe: H1       # 1H ST direction, regime group
+context_timeframe: H1       # context ST direction, regime group
 
 # ─────────────────────────────────────────
 # SUPERTREND DEFAULTS (both TFs)
@@ -378,3 +379,34 @@ instruments:
       hyp_b:
         enabled: true
         sl_fixed: 0.25
+
+  # ── AUDUSD — Phase 6 A2-only deployment candidate ───────────────────────
+  # Deploy: A2 only. A1/B deferred after study showed B dilutes the clean edge.
+  # Architecture: 15m ST(12,3) entry + 4H ST(12,3) context.
+  # Session: London+NY only (07:00-21:00 UTC).
+  # Performance: PF 1.5495, 555 trades, WR 50.63%, MaxDD 40.5R.
+  # Break-even WR with 1.5R TP and -1R loss = 40.0%.
+  #
+  AUDUSD:
+    mode: paper
+    pip_size: 0.0001
+    timeframes:
+      entry: M15
+      context: H4
+    trading_hours: [7, 21]
+    highwind:
+      halt_threshold: 0.40   # WR < 40% → HALT (break-even floor)
+      l2_threshold:   0.45   # WR < 45% → L2
+      l1_threshold:   0.50   # WR < 50% → L1; WR ≥50% step-up/NORMAL
+      seed_wins:      16     # 16/30 = 53.3% → NORMAL at start
+      seed_losses:    14
+    overrides:
+      hyp_a1:
+        enabled: false
+      hyp_a2:
+        enabled: true
+        sl_min: 0.0015
+        sl_max: 0.0025
+        sl_epsilon: 0.0003
+      hyp_b:
+        enabled: false

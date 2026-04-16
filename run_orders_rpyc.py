@@ -42,6 +42,7 @@ from config_loader import (
     config, secrets,
     get_hyp_config, get_active_symbols, get_pip_size,
     get_regime_config, get_highwind_config,
+    get_timeframe_config,
     is_in_trading_window, countertrend_enabled,
     is_paper_mode, get_state_file,
     validate_config, print_config_summary,
@@ -184,7 +185,9 @@ def ensure_symbol_state(state: dict, symbol: str):
     after the state file was first created (fresh_state only runs once).
     """
     state.setdefault("last_bar_times", {}).setdefault(
-        symbol, {"m15": None, "h1": None})
+        symbol, {"m15": None, "h1": None, "entry": None, "context": None})
+    state["last_bar_times"][symbol].setdefault("entry", state["last_bar_times"][symbol].get("m15"))
+    state["last_bar_times"][symbol].setdefault("context", state["last_bar_times"][symbol].get("h1"))
     state.setdefault("session_state", {}).setdefault(
         symbol, {"session": None, "session_bar": -1})
     state.setdefault("london_session_summary", {}).setdefault(
@@ -248,7 +251,7 @@ def fresh_state() -> dict:
         "cb_anchor"           : {"peak": None, "anchor": None,
                                  "triggered_session": False, "last_trigger_time": None},
         "rule2"               : {"base_equity": None, "triggered_today": False, "trigger_date": None},
-        "last_bar_times"      : {s: {"m15": None, "h1": None} for s in symbols},
+        "last_bar_times"      : {s: {"m15": None, "h1": None, "entry": None, "context": None} for s in symbols},
         "session_state"       : {s: {"session": None, "session_bar": -1} for s in symbols},
         "london_session_summary": {s: {"trades": 0, "wins": 0, "pnl_r": 0.0} for s in symbols},
         "ny_session_summary"    : {s: {"trades": 0, "wins": 0, "pnl_r": 0.0} for s in symbols},
@@ -926,21 +929,26 @@ def resolve_a1_a2_priority(a1_fired: bool, a1_dir: str,
 
 
 # ---------------------------------------------------------------------------
-# 1H STABILITY GATE
+# CONTEXT STABILITY GATE
 # ---------------------------------------------------------------------------
 
-def is_1h_stable(df_1h, cfg: dict) -> tuple:
+def is_context_stable(df_context, cfg: dict) -> tuple:
     """
     Returns (is_stable: bool, st_dir: int).
-    Stable = last stable_bars_1h 1H bars all same ST direction.
+    Stable = last stable_bars_1h context bars all same ST direction.
     """
     n = cfg.get("stable_bars_1h", 3)
-    if len(df_1h) < n:
+    if len(df_context) < n:
         return False, 0
-    recent = df_1h["st_direction"].values[-n:]
+    recent = df_context["st_direction"].values[-n:]
     if len(set(int(d) for d in recent)) != 1:
         return False, 0
     return True, int(recent[-1])
+
+
+def is_1h_stable(df_1h, cfg: dict) -> tuple:
+    """Backward-compatible alias for context stability."""
+    return is_context_stable(df_1h, cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -1005,7 +1013,7 @@ def detect_signal(state: dict, symbol: str, bundle: DataBundle,
     Returns signal dict if entry should be placed, None otherwise.
     """
     df_15m = bundle.df_15m
-    df_1h  = bundle.df_1h
+    df_1h  = bundle.df_context
 
     bar = df_15m.iloc[bar_idx]
 
@@ -1021,10 +1029,10 @@ def detect_signal(state: dict, symbol: str, bundle: DataBundle,
         _log_signal_replay(symbol, bar, None, None, None, False, skip_reason, df_1h)
         return None
 
-    # Step 2: 1H stability gate
-    stable, st_1h_dir = is_1h_stable(df_1h, config)
+    # Step 2: context stability gate
+    stable, st_1h_dir = is_context_stable(df_1h, config)
     if not stable:
-        skip_reason = "1H_STABILITY_FAIL"
+        skip_reason = "CONTEXT_STABILITY_FAIL"
         _log_signal_replay(symbol, bar, None, None, None, False, skip_reason, df_1h)
         return None
 
@@ -1488,10 +1496,10 @@ def _log_signal_replay(symbol: str, bar, hypothesis, direction,
     write_header = not os.path.exists(path)
     with open(path, "a") as f:
         if write_header:
-            f.write("signal_time,symbol,session,regime,st_15m_dir,st_1h_dir,"
+            f.write("signal_time,symbol,session,regime,st_entry_dir,st_context_dir,"
                     "hypothesis,direction,allow_stack,is_pullback,"
                     "cooldown_active,order_placed,skip_reason,"
-                    "entry_bar_15m,entry_bar_1h\n")
+                    "entry_bar_time,context_bar_time\n")
         st_15m = int(bar.get("st_direction", 0)) if bar is not None else 0
         st_1h  = int(df_1h["st_direction"].iloc[-1]) if df_1h is not None and len(df_1h) else 0
         hyp_str  = hypothesis or ""
@@ -1625,11 +1633,13 @@ def startup_recovery(state: dict, path: str):
 
 def check_stale(symbol: str, state: dict) -> str:
     """Returns: 'ok' | 'warn' | 'stale_idle'"""
-    last_m15 = state.get("last_bar_times", {}).get(symbol, {}).get("m15")
-    if last_m15 is None:
+    last_entry = state.get("last_bar_times", {}).get(symbol, {}).get("entry")
+    if last_entry is None:
+        last_entry = state.get("last_bar_times", {}).get(symbol, {}).get("m15")
+    if last_entry is None:
         return "ok"
     try:
-        last_dt = datetime.fromisoformat(str(last_m15))
+        last_dt = datetime.fromisoformat(str(last_entry))
     except Exception:
         return "ok"
     age_min = (datetime.now(timezone.utc).replace(tzinfo=None) - last_dt).total_seconds() / 60
@@ -1641,18 +1651,23 @@ def check_stale(symbol: str, state: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# CHEAP 15m BAR CHECK (rpyc: obtain() to materialise proxy)
+# CHEAP ENTRY BAR CHECK (rpyc: obtain() to materialise proxy)
 # ---------------------------------------------------------------------------
 
-def pull_15m_latest(symbol: str) -> str | None:
-    """Single-bar pull to detect new 15m bar without full data pull."""
-    tf    = mt5.TIMEFRAME_M15
+def pull_entry_latest(symbol: str, timeframe: str) -> str | None:
+    """Single-bar pull to detect a new entry bar without full data pull."""
+    tf    = getattr(mt5, f"TIMEFRAME_{timeframe.upper()}")
     rates = mt5.copy_rates_from_pos(symbol, tf, 0, 1)
     local = rpyc.utils.classic.obtain(rates)
     if local is None or len(local) == 0:
         return None
     ts = datetime.fromtimestamp(int(local[0]["time"]), tz=timezone.utc).replace(tzinfo=None)
     return str(ts)
+
+
+def pull_15m_latest(symbol: str) -> str | None:
+    """Backward-compatible wrapper for M15 entry checks."""
+    return pull_entry_latest(symbol, "M15")
 
 
 # ---------------------------------------------------------------------------
@@ -1728,12 +1743,17 @@ def main():
         try:
             bundles[sym] = build_data_bundle(mt5, sym, is_startup=True, rpyc_mode=True)
             df15 = bundles[sym].df_15m
-            df1h = bundles[sym].df_1h
+            df1h = bundles[sym].df_context
             if len(df15):
-                state["last_bar_times"][sym]["m15"] = str(df15["time_utc"].iloc[-1])
+                entry_time = str(df15["time_utc"].iloc[-1])
+                state["last_bar_times"][sym]["entry"] = entry_time
+                state["last_bar_times"][sym]["m15"] = entry_time
             if len(df1h):
-                state["last_bar_times"][sym]["h1"]  = str(df1h["time_utc"].iloc[-1])
-            print(f"  {sym}: {len(df15)} × 15m  |  {len(df1h)} × 1H")
+                context_time = str(df1h["time_utc"].iloc[-1])
+                state["last_bar_times"][sym]["context"] = context_time
+                state["last_bar_times"][sym]["h1"] = context_time
+            print(f"  {sym}: {len(df15)} × {bundles[sym].entry_tf}  |  "
+                  f"{len(df1h)} × {bundles[sym].context_tf}")
         except Exception as e:
             log_event("DATA_PULL_ERROR", f"{sym} startup: {e}")
     save_state(state, state_path)
@@ -1802,17 +1822,19 @@ def main():
 
                 # Cheap new-bar check
                 try:
-                    latest_m15 = pull_15m_latest(sym)
-                    if latest_m15 is None:
+                    latest_entry = pull_entry_latest(sym, get_timeframe_config(sym, "entry"))
+                    if latest_entry is None:
                         continue
                 except Exception:
                     continue
 
-                last_m15 = state["last_bar_times"][sym].get("m15")
-                if latest_m15 == last_m15:
+                last_entry = state["last_bar_times"][sym].get("entry")
+                if last_entry is None:
+                    last_entry = state["last_bar_times"][sym].get("m15")
+                if latest_entry == last_entry:
                     continue  # no new bar
 
-                # New 15m bar — full data pull
+                # New entry bar — full data pull
                 try:
                     bundles[sym] = build_data_bundle(mt5, sym, is_startup=False, rpyc_mode=True)
                 except Exception as e:
@@ -1820,14 +1842,18 @@ def main():
                     continue
 
                 df15 = bundles[sym].df_15m
-                df1h = bundles[sym].df_1h
+                df1h = bundles[sym].df_context
                 if df15 is None or len(df15) == 0:
                     log_event("EMPTY_DATA", sym)
                     continue
 
                 # Update bar times
-                state["last_bar_times"][sym]["m15"] = str(df15["time_utc"].iloc[-1])
-                state["last_bar_times"][sym]["h1"]  = str(df1h["time_utc"].iloc[-1])
+                entry_time = str(df15["time_utc"].iloc[-1])
+                context_time = str(df1h["time_utc"].iloc[-1])
+                state["last_bar_times"][sym]["entry"] = entry_time
+                state["last_bar_times"][sym]["context"] = context_time
+                state["last_bar_times"][sym]["m15"] = entry_time
+                state["last_bar_times"][sym]["h1"] = context_time
 
                 # Update session state
                 last_bar    = df15.iloc[-1]
@@ -1969,7 +1995,7 @@ def main():
                 # ── ChoCh detection — runs BEFORE detect_signal (bypasses pullback filter) ──
                 # ChoCh bar has st_15m ≠ st_1h by definition; detect_signal pullback gate
                 # would block it if detection were inside detect_signal.
-                stable_pre, st_1h_dir_pre = is_1h_stable(df1h, config)
+                stable_pre, st_1h_dir_pre = is_context_stable(df1h, config)
                 if stable_pre and bar_idx > 0:
                     choch_bar = df15.iloc[bar_idx]
                     detect_choch(

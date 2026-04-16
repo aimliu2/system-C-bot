@@ -102,6 +102,24 @@ def get_pip_size(symbol: str) -> float:
     return config["instruments"][symbol]["pip_size"]
 
 
+SUPPORTED_TIMEFRAMES = {"M15", "M30", "H1", "H4", "D1"}
+
+
+def _normalise_timeframe(value: str) -> str:
+    return str(value).upper().strip()
+
+
+def get_timeframe_config(symbol: str, role: str) -> str:
+    """Return effective entry/context timeframe label for a symbol."""
+    role_key = "context" if role in ("context", "ctx", "1h", "h1", "4h", "h4") else "entry"
+    default_key = f"{role_key}_timeframe"
+    default_value = config.get(default_key, "H1" if role_key == "context" else "M15")
+    inst_tf = (config.get("instruments", {})
+                     .get(symbol, {})
+                     .get("timeframes", {}) or {})
+    return _normalise_timeframe(inst_tf.get(role_key, default_value))
+
+
 def get_regime_config() -> dict:
     return config["regime"]
 
@@ -264,6 +282,14 @@ def validate_config():
             if not (0 <= start < end <= 24):
                 errors.append(f"instruments.{symbol}.trading_windows invalid [{start}, {end}]")
 
+        for tf_role in ("entry", "context"):
+            tf = get_timeframe_config(symbol, tf_role)
+            if tf not in SUPPORTED_TIMEFRAMES:
+                errors.append(
+                    f"instruments.{symbol}.timeframes.{tf_role} unsupported: {tf} "
+                    f"(supported: {', '.join(sorted(SUPPORTED_TIMEFRAMES))})"
+                )
+
         for tf in ("entry", "context"):
             st_cfg = get_st_config(symbol, tf)
             if int(st_cfg.get("st_period", 0)) < 1:
@@ -351,9 +377,9 @@ def print_config_summary():
     print(f"{'─'*50}")
     print(f"  Global paper mode : {config.get('paper_mode', False)}")
     print(f"  Base risk         : {config.get('base_risk_pct')}%")
-    print(f"  Max hold bars     : {config.get('max_hold_bars')} × 15m")
+    print(f"  Max hold bars     : {config.get('max_hold_bars')} × entry bars")
     print(f"  Cooldown bars     : {config.get('cooldown_bars')} bars (after SL)")
-    print(f"  Stable 1H bars    : {config.get('stable_bars_1h')}")
+    print(f"  Stable ctx bars   : {config.get('stable_bars_1h')}")
     print(f"  ST params         : period={config.get('st_period')} mult={config.get('st_multiplier')}")
     print(f"  MT5 server        : {secrets['mt5_server']}")
 
@@ -371,10 +397,13 @@ def print_config_summary():
         a2_str = f"A2({'ON' if a2.get('enabled') else 'OFF'})"
         b_str  = f"B({'ON' if b.get('enabled') else 'OFF'})"
         windows = ",".join(f"{s:02d}-{e:02d}" for s, e in get_trading_windows(symbol))
+        entry_tf = get_timeframe_config(symbol, "entry")
+        context_tf = get_timeframe_config(symbol, "context")
         st_entry = get_st_config(symbol, "entry")
         st_ctx = get_st_config(symbol, "context")
         print(f"    {symbol:<8} {mode.upper():<6}  pip={pip}  {a1_str} {a2_str} {b_str}"
               f"  windows={windows}UTC"
+              f"  TF(entry={entry_tf} context={context_tf})"
               f"  ST(entry={st_entry['st_period']},{st_entry['st_multiplier']}"
               f" context={st_ctx['st_period']},{st_ctx['st_multiplier']})")
     print(f"{'─'*50}\n")

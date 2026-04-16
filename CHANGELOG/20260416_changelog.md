@@ -107,6 +107,65 @@ Applied technical adversary-audit fixes for GBPJPY Phase 5 and EURUSD live execu
 - Diff whitespace check passed:
   - `git diff --check`
 
+## AUDUSD Phase 6 Timeframe Parity Preparation
+
+Prepared the codebase for AUDUSD London+NY Phase 6 `A2-only` paper deployment.
+
+### Configuration
+
+- Added `AUDUSD` to `deployment_symbols`.
+- Added AUDUSD paper/shadow configuration:
+  - `mode: paper`
+  - `timeframes.entry: M15`
+  - `timeframes.context: H4`
+  - `A1 OFF / A2 ON / B OFF`
+  - London+NY window `07:00-21:00 UTC`
+- Added AUDUSD A2 stop parameters:
+  - `sl_min: 0.0015`
+  - `sl_max: 0.0025`
+  - `sl_epsilon: 0.0003`
+- Seeded AUDUSD Highwind from Phase 6 A2-only study:
+  - Study WR `50.63%`
+  - Payoff `+1.5R / -1R`
+  - Break-even WR `40.0%`
+  - `halt_threshold: 0.40`
+  - `l2_threshold: 0.45`
+  - `l1_threshold: 0.50`
+  - seed window `16W / 14L`
+
+### Code
+
+- Updated `config_loader.py`:
+  - Added effective timeframe resolver for `entry` and `context`.
+  - Added timeframe validation.
+  - Updated config summary to print entry/context TFs.
+- Updated `run_data.py`:
+  - Entry/context bar pulls now use configured timeframes instead of hardcoded `M15/H1`.
+  - Added generic context indicator path while preserving `df_1h` compatibility aliases.
+  - Regime classifier now forward-fills configured context bars onto entry bars.
+- Updated `run_orders_vps.py` and `run_orders_rpyc.py`:
+  - New-bar detection now uses configured entry timeframe.
+  - Context stability now uses configured context timeframe.
+  - Startup prints and signal replay headers now use generic entry/context wording.
+  - State keeps new `last_bar_times.entry/context` keys while preserving legacy `m15/h1`.
+- Updated `status.py`:
+  - Last-processed display now shows each symbol's configured entry/context TFs.
+
+### Validation
+
+- Config validation passed and resolved:
+  - `EURUSD M15/H1 A2+B live`
+  - `GBPJPY M15/H1 A1+A2+B paper`
+  - `AUDUSD M15/H4 A2-only paper`
+- Syntax check passed for:
+  - `config_loader.py`
+  - `run_data.py`
+  - `run_orders_vps.py`
+  - `run_orders_rpyc.py`
+  - `status.py`
+- Diff whitespace check passed:
+  - `git diff --check`
+
 ### Remaining Work
 
 - Add a bot-side historical replay harness that executes the same live strategy logic against historical GBPJPY data.

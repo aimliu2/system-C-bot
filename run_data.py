@@ -2,11 +2,11 @@
 run_data.py — System C: Dual-Timeframe Data + Indicators
 v1.0 · April 2026
 
-Pulls 15m (entry TF) and 1H (context TF) bars from MT5.
+Pulls configured entry and context timeframe bars from MT5.
 Computes:
-  15m: SuperTrend(12,3), EMA20, EMA3, RSI30, ATR ratio, EMA20/60
-  1H:  SuperTrend(12,3), EMA50, EMA200, RSI30
-  Regime: 7-regime classifier (1H EMA group + 15m ATR/RSI sub-state)
+  Entry TF:   SuperTrend, EMA touch/traj, RSI30, ATR ratio, EMA20/60
+  Context TF: SuperTrend, EMA50, EMA200
+  Regime: 7-regime classifier (context EMA group + entry ATR/RSI sub-state)
 
 No orders. No state. Math must match backtest study exactly.
 
@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from collections import namedtuple
 from numba import njit
 
-from config_loader import config, get_regime_config, get_st_config
+from config_loader import config, get_regime_config, get_st_config, get_timeframe_config
 
 # ---------------------------------------------------------------------------
 # CONSTANTS
@@ -28,7 +28,10 @@ from config_loader import config, get_regime_config, get_st_config
 
 WEEKDAYS = {0, 1, 2, 3, 4}  # Mon=0 ... Fri=4
 
-DataBundle = namedtuple("DataBundle", ["df_15m", "df_1h"])
+DataBundle = namedtuple(
+    "DataBundle",
+    ["df_15m", "df_1h", "df_context", "entry_tf", "context_tf"],
+)
 
 # ---------------------------------------------------------------------------
 # BROKER OFFSET DETECTION
@@ -149,19 +152,19 @@ def compute_rsi(series: pd.Series, period: int) -> pd.Series:
 
 
 # ---------------------------------------------------------------------------
-# 15m INDICATORS
+# ENTRY INDICATORS
 # ---------------------------------------------------------------------------
 
-def add_15m_indicators(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+def add_entry_indicators(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     """
-    Add all 15m indicators required for hypothesis detection.
+    Add all entry-timeframe indicators required for hypothesis detection.
 
       ST(12,3)         → st_line, st_direction, st_upper, st_lower
       EMA(touch_span)  → ema_touch  (A1 bounce target; span from config)
       EMA(traj_span)   → ema_traj   (A1 trajectory filter)
       RSI(30)          → rsi        (A1 gate + regime sub-state)
       ATR ratio        → atr_ratio  (regime sub-state)
-      EMA20 / EMA60    → ema20_15m, ema60_15m (regime reference)
+      EMA20 / EMA60    → ema20_entry, ema60_entry (regime reference)
     """
     from config_loader import get_hyp_config
     df = df.copy()
@@ -195,23 +198,28 @@ def add_15m_indicators(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     atr_l         = compute_atr(df, atr_long_p)
     df["atr_ratio"] = atr_s / atr_l.replace(0, float("nan"))
 
-    # 15m EMA20/60 — regime sub-state reference only
-    df["ema20_15m"] = compute_ema(df["close"], regime_cfg.get("ema_fast_15m", 20))
-    df["ema60_15m"] = compute_ema(df["close"], regime_cfg.get("ema_slow_15m", 60))
+    # Entry EMA20/60 — regime sub-state reference only
+    df["ema20_entry"] = compute_ema(df["close"], regime_cfg.get("ema_fast_15m", 20))
+    df["ema60_entry"] = compute_ema(df["close"], regime_cfg.get("ema_slow_15m", 60))
 
     return df
 
 
+def add_15m_indicators(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """Backward-compatible wrapper for existing imports/tests."""
+    return add_entry_indicators(df, symbol)
+
+
 # ---------------------------------------------------------------------------
-# 1H INDICATORS
+# CONTEXT INDICATORS
 # ---------------------------------------------------------------------------
 
-def add_1h_indicators(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+def add_context_indicators(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     """
-    Add all 1H indicators required for context and regime group.
+    Add all context-timeframe indicators required for context and regime group.
 
       ST(12,3)     → st_line, st_direction
-      EMA50/200    → ema50_1h, ema200_1h  (regime group)
+      EMA50/200    → ema50_context, ema200_context  (regime group)
     """
     df = df.copy()
 
@@ -226,10 +234,18 @@ def add_1h_indicators(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     df["st_lower"]     = st["st_lower"]
 
     regime_cfg      = get_regime_config()
-    df["ema50_1h"]  = compute_ema(df["close"], regime_cfg.get("ema_fast_1h", 50))
-    df["ema200_1h"] = compute_ema(df["close"], regime_cfg.get("ema_slow_1h", 200))
+    df["ema50_context"]  = compute_ema(df["close"], regime_cfg.get("ema_fast_1h", 50))
+    df["ema200_context"] = compute_ema(df["close"], regime_cfg.get("ema_slow_1h", 200))
+    # Transitional aliases keep older analysis code working.
+    df["ema50_1h"]       = df["ema50_context"]
+    df["ema200_1h"]      = df["ema200_context"]
 
     return df
+
+
+def add_1h_indicators(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """Backward-compatible wrapper for existing imports/tests."""
+    return add_context_indicators(df, symbol)
 
 
 # ---------------------------------------------------------------------------
@@ -358,11 +374,11 @@ def _regime_substate(confirmed_group, rsi, atr_ratio,
 # 7-REGIME CLASSIFIER
 # ---------------------------------------------------------------------------
 
-def compute_regime_7(df_15m: pd.DataFrame, df_1h: pd.DataFrame) -> pd.Series:
+def compute_regime_7(df_15m: pd.DataFrame, df_context: pd.DataFrame) -> pd.Series:
     """
     7-regime classifier. Per-bar on df_15m index.
 
-    Step 1 — Group (1H EMA50/200 crossover, with ema_confirm_bars buffer):
+    Step 1 — Group (context EMA50/200 crossover, with ema_confirm_bars buffer):
         EMA50 > EMA200  (confirmed N bars)  →  BULLISH group
         EMA50 < EMA200  (confirmed N bars)  →  BEARISH group
         Transitioning                        →  hold previous
@@ -383,8 +399,8 @@ def compute_regime_7(df_15m: pd.DataFrame, df_1h: pd.DataFrame) -> pd.Series:
     """
     rc = get_regime_config()
 
-    ema_fast_col = "ema50_1h"
-    ema_slow_col = "ema200_1h"
+    ema_fast_col = "ema50_context"
+    ema_slow_col = "ema200_context"
     confirm_n    = rc.get("ema_confirm_bars", 3)
 
     atr_compress = rc.get("atr_compress", 1.0)
@@ -397,22 +413,21 @@ def compute_regime_7(df_15m: pd.DataFrame, df_1h: pd.DataFrame) -> pd.Series:
     rsi_bull     = rc.get("rsi_bull_band",  55.0)
     rsi_dist     = rc.get("rsi_dist_entry", 60.0)
 
-    # ── Step 1: 1H group assignment ──────────────────────────────────────
-    # Reindex 1H onto 15m timestamps (forward-fill — each 15m bar sees
-    # the most recent closed 1H bar's indicators)
-    df_1h_ri = df_1h.set_index("time_utc")[[ema_fast_col, ema_slow_col, "st_direction"]].copy()
-    df_1h_ri = df_1h_ri[~df_1h_ri.index.duplicated(keep="last")]
+    # ── Step 1: context group assignment ─────────────────────────────────
+    # Reindex context onto entry timestamps (forward-fill — each entry bar sees
+    # the most recent closed context bar's indicators)
+    df_context_ri = df_context.set_index("time_utc")[[ema_fast_col, ema_slow_col, "st_direction"]].copy()
+    df_context_ri = df_context_ri[~df_context_ri.index.duplicated(keep="last")]
     df_15m_times = df_15m["time_utc"]
 
-    ema_fast_1h = df_1h_ri[ema_fast_col].reindex(df_15m_times, method="ffill").values
-    ema_slow_1h = df_1h_ri[ema_slow_col].reindex(df_15m_times, method="ffill").values
-    st_dir_1h   = df_1h_ri["st_direction"].reindex(df_15m_times, method="ffill").values
+    ema_fast_context = df_context_ri[ema_fast_col].reindex(df_15m_times, method="ffill").values
+    ema_slow_context = df_context_ri[ema_slow_col].reindex(df_15m_times, method="ffill").values
 
     n = len(df_15m)
     group = np.full(n, "", dtype=object)  # "BULLISH" | "BEARISH" | ""
 
     # Compute raw crossover signal (1 = bull cross, -1 = bear cross, 0 = unclear)
-    raw_cross = np.where(ema_fast_1h > ema_slow_1h, 1, -1)
+    raw_cross = np.where(ema_fast_context > ema_slow_context, 1, -1)
 
     # Apply confirmation buffer: require confirm_n consecutive bars before flipping group
     raw_cross_int   = raw_cross.astype(np.int32)
@@ -438,44 +453,49 @@ def compute_regime_7(df_15m: pd.DataFrame, df_1h: pd.DataFrame) -> pd.Series:
 # DATA PULL — VPS (native MT5)
 # ---------------------------------------------------------------------------
 
-def pull_bars_15m(mt5, symbol: str, n_bars: int) -> pd.DataFrame:
-    tf    = mt5.TIMEFRAME_M15
+def _mt5_timeframe(mt5, timeframe: str):
+    attr = f"TIMEFRAME_{timeframe.upper()}"
+    if not hasattr(mt5, attr):
+        raise ValueError(f"Unsupported MT5 timeframe: {timeframe}")
+    return getattr(mt5, attr)
+
+
+def pull_bars(mt5, symbol: str, timeframe: str, n_bars: int) -> pd.DataFrame:
+    tf    = _mt5_timeframe(mt5, timeframe)
     rates = mt5.copy_rates_from_pos(symbol, tf, 0, n_bars)
     df    = pd.DataFrame(rates)
     df["time_utc"] = pd.to_datetime(df["time"], unit="s", utc=True).dt.tz_localize(None)
     return df
+
+
+def pull_bars_15m(mt5, symbol: str, n_bars: int) -> pd.DataFrame:
+    return pull_bars(mt5, symbol, "M15", n_bars)
 
 
 def pull_bars_1h(mt5, symbol: str, n_bars: int) -> pd.DataFrame:
-    tf    = mt5.TIMEFRAME_H1
-    rates = mt5.copy_rates_from_pos(symbol, tf, 0, n_bars)
-    df    = pd.DataFrame(rates)
-    df["time_utc"] = pd.to_datetime(df["time"], unit="s", utc=True).dt.tz_localize(None)
-    return df
+    return pull_bars(mt5, symbol, "H1", n_bars)
 
 
 # ---------------------------------------------------------------------------
 # DATA PULL — rpyc (macOS, via bridge)
 # ---------------------------------------------------------------------------
 
-def pull_bars_15m_rpyc(mt5, symbol: str, n_bars: int) -> pd.DataFrame:
+def pull_bars_rpyc(mt5, symbol: str, timeframe: str, n_bars: int) -> pd.DataFrame:
     import rpyc.utils.classic
-    tf    = mt5.TIMEFRAME_M15
+    tf    = _mt5_timeframe(mt5, timeframe)
     rates = mt5.copy_rates_from_pos(symbol, tf, 0, n_bars)
     local = rpyc.utils.classic.obtain(rates)
     df    = pd.DataFrame(local)
     df["time_utc"] = pd.to_datetime(df["time"], unit="s", utc=True).dt.tz_localize(None)
     return df
+
+
+def pull_bars_15m_rpyc(mt5, symbol: str, n_bars: int) -> pd.DataFrame:
+    return pull_bars_rpyc(mt5, symbol, "M15", n_bars)
 
 
 def pull_bars_1h_rpyc(mt5, symbol: str, n_bars: int) -> pd.DataFrame:
-    import rpyc.utils.classic
-    tf    = mt5.TIMEFRAME_H1
-    rates = mt5.copy_rates_from_pos(symbol, tf, 0, n_bars)
-    local = rpyc.utils.classic.obtain(rates)
-    df    = pd.DataFrame(local)
-    df["time_utc"] = pd.to_datetime(df["time"], unit="s", utc=True).dt.tz_localize(None)
-    return df
+    return pull_bars_rpyc(mt5, symbol, "H1", n_bars)
 
 
 # ---------------------------------------------------------------------------
@@ -485,30 +505,39 @@ def pull_bars_1h_rpyc(mt5, symbol: str, n_bars: int) -> pd.DataFrame:
 def build_data_bundle(mt5, symbol: str, is_startup: bool,
                       rpyc_mode: bool = False) -> DataBundle:
     """
-    Pull and process both timeframes. Called on each 15m bar close.
+    Pull and process both timeframes. Called on each entry bar close.
 
     is_startup=True  → pull full history (bars_to_pull_*)
     is_startup=False → pull running history (bars_running_*)
 
-    Returns DataBundle(df_15m, df_1h) with all indicators computed.
+    Returns DataBundle with entry/context data. df_15m/df_1h are compatibility
+    aliases used by the order runners.
     """
+    entry_tf = get_timeframe_config(symbol, "entry")
+    context_tf = get_timeframe_config(symbol, "context")
     n_15m = config["bars_to_pull_15m"] if is_startup else config["bars_running_15m"]
     n_1h  = config["bars_to_pull_1h"]  if is_startup else config["bars_running_1h"]
 
     if rpyc_mode:
-        df_15m = pull_bars_15m_rpyc(mt5, symbol, n_15m)
-        df_1h  = pull_bars_1h_rpyc(mt5, symbol, n_1h)
+        df_15m = pull_bars_rpyc(mt5, symbol, entry_tf, n_15m)
+        df_1h  = pull_bars_rpyc(mt5, symbol, context_tf, n_1h)
     else:
-        df_15m = pull_bars_15m(mt5, symbol, n_15m)
-        df_1h  = pull_bars_1h(mt5, symbol, n_1h)
+        df_15m = pull_bars(mt5, symbol, entry_tf, n_15m)
+        df_1h  = pull_bars(mt5, symbol, context_tf, n_1h)
 
-    df_15m = add_15m_indicators(df_15m, symbol)
-    df_1h  = add_1h_indicators(df_1h, symbol)
+    df_15m = add_entry_indicators(df_15m, symbol)
+    df_1h  = add_context_indicators(df_1h, symbol)
 
     df_15m["session"] = assign_session(df_15m["time_utc"])
     df_15m["regime"]  = compute_regime_7(df_15m, df_1h)
 
-    return DataBundle(df_15m=df_15m, df_1h=df_1h)
+    return DataBundle(
+        df_15m=df_15m,
+        df_1h=df_1h,
+        df_context=df_1h,
+        entry_tf=entry_tf,
+        context_tf=context_tf,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -540,16 +569,18 @@ def main():
 
         bundle = build_data_bundle(mt5, symbol, is_startup=True, rpyc_mode=False)
         df15   = bundle.df_15m
-        df1h   = bundle.df_1h
+        df1h   = bundle.df_context
+        entry_tf = bundle.entry_tf
+        context_tf = bundle.context_tf
 
-        print(f"  15m bars: {len(df15)}  |  1H bars: {len(df1h)}")
-        print(f"  15m last: {df15['time_utc'].iloc[-1]}")
-        print(f"  1H  last: {df1h['time_utc'].iloc[-1]}")
+        print(f"  {entry_tf} bars: {len(df15)}  |  {context_tf} bars: {len(df1h)}")
+        print(f"  {entry_tf} last: {df15['time_utc'].iloc[-1]}")
+        print(f"  {context_tf} last: {df1h['time_utc'].iloc[-1]}")
 
         last15 = df15.iloc[-1]
         last1h = df1h.iloc[-1]
 
-        print(f"\n  15m current bar:")
+        print(f"\n  {entry_tf} current bar:")
         print(f"    time_utc    : {last15['time_utc']}")
         print(f"    close       : {last15['close']:.6f}")
         print(f"    st_line     : {last15['st_line']:.6f}")
@@ -561,18 +592,18 @@ def main():
         print(f"    session     : {last15['session']}")
         print(f"    regime      : {last15['regime']}")
 
-        print(f"\n  1H current bar:")
+        print(f"\n  {context_tf} current bar:")
         print(f"    time_utc    : {last1h['time_utc']}")
         print(f"    close       : {last1h['close']:.6f}")
         print(f"    st_line     : {last1h['st_line']:.6f}")
         print(f"    st_dir      : {int(last1h['st_direction'])} ({'BULL' if last1h['st_direction']==1 else 'BEAR'})")
-        print(f"    ema50       : {last1h['ema50_1h']:.6f}")
-        print(f"    ema200      : {last1h['ema200_1h']:.6f}")
+        print(f"    ema50       : {last1h['ema50_context']:.6f}")
+        print(f"    ema200      : {last1h['ema200_context']:.6f}")
 
         pd.set_option("display.float_format", lambda x: f"{x:.6f}")
         cols15 = ["time_utc", "close", "st_line", "st_direction",
                   "ema_touch", "rsi", "atr_ratio", "session", "regime"]
-        print(f"\n  Last 10 × 15m bars:")
+        print(f"\n  Last 10 × {entry_tf} bars:")
         print(df15[cols15].tail(10).to_string(index=False))
 
         # Regime distribution summary
