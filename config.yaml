@@ -16,6 +16,7 @@ paper_mode: false
 # if an instrument section is accidentally left in paper/live mode.
 deployment_symbols:
   - EURUSD
+  - GBPJPY
 
 # ─────────────────────────────────────────
 # STATE FILES — DO NOT MIX
@@ -42,6 +43,23 @@ context_timeframe: H1       # 1H ST direction, regime group
 #
 st_period:     12
 st_multiplier: 3.0
+
+# Granular indicator config. Legacy st_period/st_multiplier above remain as a
+# fallback, but live code reads this shape first.
+indicators:
+  entry:
+    supertrend:
+      period:     12
+      multiplier: 3.0
+  context:
+    supertrend:
+      period:     12
+      multiplier: 3.0
+
+# No-countertrend contract. Phase studies assume entry-TF direction must align
+# with context direction before any A1/A2/B signal is eligible.
+countertrend_trades:
+  enabled: false
 
 # ─────────────────────────────────────────
 # SESSIONS (UTC hours, half-open intervals)
@@ -316,31 +334,46 @@ instruments:
       hyp_b:
         sl_fixed: 0.0025      # 25 pip fixed (wider ADR; global default is 20 pip)
 
-  # ── GBPJPY — study concluded 2026-04-14, opt2 (A1 only) ─────────────────
-  # Deploy: A1 V2 only. A2 dropped (PF 0.808). B dropped (PF 1.010 — drag).
-  # Session: Asian + London + Ldn/NY (00:00–17:00 UTC). NY 17–21 excluded.
+  # ── GBPJPY — Phase 5 A1+A2+B deployment candidate ───────────────────────
+  # Deploy: A1 + A2 + B together.
+  # Architecture: 15m ST(11,2) entry + 1H ST(12,3) context.
+  # Session: 00:00–21:00 UTC, matching Phase 5 validation.
   # SL in GBPJPY pip terms (pip_size=0.01): sl_min=0.15 (15p), sl_max=0.25 (25p).
-  # No regime gate needed — A1 V2 sufficient standalone (PF 1.1778).
-  # Performance: PF 1.1778, 1,521 trades (7yr), WR 44.0%, MaxDD 24.5R.
-  # See instruments-study/systemC-GBPJPY-opt2.md for full study.
+  # Performance: PF 1.1364, 2,178 trades, WR 40.08%, MaxDD 29.5R.
   #
   GBPJPY:
-    mode: disabled        # one-symbol EURUSD launch
+    mode: paper           # promote to live after shadow/pilot confirmation
     pip_size: 0.01
-    trading_hours: [0, 17]   # Asian + London + Ldn/NY (00:00–17:00 UTC); NY 17–21 excluded
-    # Highwind: higher thresholds (A1 only, RR=1.5, break-even 40%, study WR 44%). Seeds at L1.
+    trading_windows:
+      - [0, 21]
+    # Highwind: calibrated to Phase 5 combined stack.
+    # WR=40.08%, avg win=1.6987R, breakeven WR≈37.1%.
     highwind:
-      halt_threshold: 0.36   # WR < 36% → HALT
-      l2_threshold:   0.40   # WR < 40% → L2
-      l1_threshold:   0.44   # WR < 44% → L1 (below study WR 44.0%)
-      seed_wins:      13     # 13/30 = 43.3% → L1 at start
-      seed_losses:    17
+      halt_threshold: 0.34   # WR < 34% → HALT
+      l2_threshold:   0.37   # WR < 37% → L2
+      l1_threshold:   0.40   # WR < 40% → L1; WR ≥40% step-up/NORMAL
+      seed_wins:      12     # 12/30 = 40.0% → NORMAL at start
+      seed_losses:    18
     overrides:
-      hyp_a2:
-        enabled: false        # no viable gate on GBPJPY (PF 0.808 — structural drain)
-      hyp_b:
-        enabled: false        # break-even passenger (PF 1.010); dropped for quality
+      indicators:
+        entry:
+          supertrend:
+            period: 11
+            multiplier: 2.0
+        context:
+          supertrend:
+            period: 12
+            multiplier: 3.0
       hyp_a1:
-        blocked_regimes: []   # no regime gate needed — V2 sufficient as-is
+        enabled: true
+        blocked_regimes: []   # no regime gate in Phase 5
         sl_min: 0.15          # 15 pip floor in GBPJPY pip terms (0.01 × 15)
         sl_max: 0.25          # 25 pip cap
+      hyp_a2:
+        enabled: true
+        sl_min: 0.15
+        sl_max: 0.25
+        sl_epsilon: 0.03
+      hyp_b:
+        enabled: true
+        sl_fixed: 0.25

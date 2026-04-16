@@ -35,7 +35,7 @@ from config_loader import (
     config, secrets,
     get_hyp_config, get_active_symbols, get_pip_size,
     get_regime_config, get_highwind_config,
-    get_trading_hours,
+    is_in_trading_window, countertrend_enabled,
     is_paper_mode, get_state_file,
     validate_config, print_config_summary,
 )
@@ -568,13 +568,11 @@ def is_a1_context(st_line_vals, st_dirs, idx: int, direction: str,
 
 
 def ema3_ok(ema_traj_vals, idx: int, direction: str) -> bool:
-    """EMA3 net-descending toward EMA20 (long) or ascending (short)."""
-    if idx < 2:
+    """EMA3 trajectory filter from the Phase 2/5 study."""
+    if idx < 3:
         return False
-    if direction == "long":
-        return ema_traj_vals[idx] < ema_traj_vals[idx - 1]
-    else:
-        return ema_traj_vals[idx] > ema_traj_vals[idx - 1]
+    return (ema_traj_vals[idx - 3] > ema_traj_vals[idx - 1] if direction == "long"
+            else ema_traj_vals[idx - 3] < ema_traj_vals[idx - 1])
 
 
 def hyp_a1_trigger(bar_low: float, bar_high: float,
@@ -964,10 +962,9 @@ def detect_signal(state: dict, symbol: str, bundle: DataBundle,
     bar_regime   = str(bar.get("regime", "UNKNOWN"))
     bar_session  = str(bar.get("session", "none"))
 
-    # Step 1: Session gate — per-instrument trading hours
-    t_start, t_end = get_trading_hours(symbol)
+    # Step 1: Session gate — per-instrument trading windows
     bar_hour = bar["time_utc"].hour
-    if not (t_start <= bar_hour < t_end):
+    if not is_in_trading_window(symbol, bar_hour):
         skip_reason = "SESSION_SKIP"
         _log_signal_replay(symbol, bar, None, None, None, False, skip_reason, df_1h)
         return None
@@ -993,9 +990,15 @@ def detect_signal(state: dict, symbol: str, bundle: DataBundle,
             return None
         # else: re-entry allowed for Hyp B — fall through
 
-    # Step 4: Pullback filter removed — A1 pullback gate is handled during trigger-first dispatch.
-    # (A1 invalid when entry_dir_a1 ≠ trend_dir_1h; A2 uses 1H direction so it can
-    #  fire in the 1H direction even when 15m is counter-trend)
+    trend_dir_1h = "long" if st_1h_dir == 1 else "short"
+    entry_dir_15m = "long" if st_15m_dir == 1 else "short"
+
+    # Step 4: No-countertrend contract. Phase studies assume entries only when
+    # entry-TF direction aligns with context direction unless explicitly enabled.
+    if not countertrend_enabled(symbol) and entry_dir_15m != trend_dir_1h:
+        skip_reason = "COUNTERTREND_BLOCKED"
+        _log_signal_replay(symbol, bar, None, None, None, False, skip_reason, df_1h)
+        return None
 
     # Step 5: Trigger-first hypothesis dispatch.
     # B keeps top priority, matching the phase2-rework A2+B baseline.
@@ -1023,8 +1026,7 @@ def detect_signal(state: dict, symbol: str, bundle: DataBundle,
     touch_allowed = len([t for t in state.get("open_trades", []) if t["symbol"] == symbol]) == 0  # A1 flicker suppression — per symbol
 
     if hyp is None:
-        trend_dir_1h = "long" if st_1h_dir == 1 else "short"
-        entry_dir_a1 = "long" if st_15m_dir == 1 else "short"
+        entry_dir_a1 = entry_dir_15m
         a2_dir = trend_dir_1h
 
         a1_fired = False

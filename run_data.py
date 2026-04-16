@@ -167,7 +167,7 @@ def add_15m_indicators(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     df = df.copy()
 
     # SuperTrend — per-instrument params (supports override in config.yaml)
-    st_cfg = get_st_config(symbol)
+    st_cfg = get_st_config(symbol, "entry")
     period = st_cfg["st_period"]
     mult   = st_cfg["st_multiplier"]
     st     = compute_supertrend(df, period, mult)
@@ -216,7 +216,7 @@ def add_1h_indicators(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     df = df.copy()
 
     # Per-instrument ST params (supports override in config.yaml)
-    st_cfg = get_st_config(symbol)
+    st_cfg = get_st_config(symbol, "context")
     period = st_cfg["st_period"]
     mult   = st_cfg["st_multiplier"]
     st     = compute_supertrend(df, period, mult)

@@ -42,7 +42,7 @@ from config_loader import (
     config, secrets,
     get_hyp_config, get_active_symbols, get_pip_size,
     get_regime_config, get_highwind_config,
-    get_trading_hours,
+    is_in_trading_window, countertrend_enabled,
     is_paper_mode, get_state_file,
     validate_config, print_config_summary,
 )
@@ -574,16 +574,22 @@ def pa_on_new_flip(state: dict, symbol: str):
 
 def count_st_steps_since_flip(st_line_vals, st_dirs, bar_idx: int,
                                direction: str) -> int:
-    """Count how many times ST line changed value since last flip."""
+    """Count ST line steps in the trend direction since the last ST flip."""
     current_dir = 1 if direction == "long" else -1
-    steps = 0
-    prev_val = None
-    for i in range(bar_idx, -1, -1):
+    last_flip_idx = 0
+    for i in range(bar_idx - 1, -1, -1):
         if int(st_dirs[i]) != current_dir:
+            last_flip_idx = i
             break
-        if prev_val is not None and st_line_vals[i] != prev_val:
+
+    steps = 0
+    for i in range(last_flip_idx + 1, bar_idx + 1):
+        if i == 0:
+            continue
+        if direction == "long" and st_line_vals[i] > st_line_vals[i - 1]:
             steps += 1
-        prev_val = st_line_vals[i]
+        elif direction == "short" and st_line_vals[i] < st_line_vals[i - 1]:
+            steps += 1
     return steps
 
 
@@ -593,11 +599,11 @@ def is_a1_context(st_line_vals, st_dirs, bar_idx: int,
 
 
 def ema3_ok(ema_traj_vals, idx: int, direction: str) -> bool:
-    """EMA3 slope filter: rising for long, falling for short."""
-    if idx < 1:
-        return True
-    slope = ema_traj_vals[idx] - ema_traj_vals[idx - 1]
-    return slope > 0 if direction == "long" else slope < 0
+    """EMA3 trajectory filter from the Phase 2/5 study."""
+    if idx < 3:
+        return False
+    return (ema_traj_vals[idx - 3] > ema_traj_vals[idx - 1] if direction == "long"
+            else ema_traj_vals[idx - 3] < ema_traj_vals[idx - 1])
 
 
 def hyp_a1_trigger(bar_low: float, bar_high: float,
@@ -610,30 +616,24 @@ def hyp_a1_trigger(bar_low: float, bar_high: float,
     A1 V2 trigger: EMA touch + EMA3 trajectory + RSI gate.
     touch_allowed: False suppresses flicker re-entry when position already open.
     """
-    eps      = a1_cfg.get("touch_epsilon", 0.0003)
     bull_rsi = a1_cfg.get("rsi_bull_gate", 55.0)
     bear_rsi = a1_cfg.get("rsi_bear_gate", 48.0)
 
-    # RSI gate
-    if direction == "long" and rsi_i <= bull_rsi:
-        return False
-    if direction == "short" and rsi_i >= bear_rsi:
+    if not touch_allowed or idx < 3:
         return False
 
-    # EMA3 trajectory
-    if not ema3_ok(ema_traj_vals, idx, direction):
-        return False
-
-    # EMA touch
     if direction == "long":
-        touched = bar_low <= ema_touch_i + eps
+        aligned    = close_prev > ema_touch_prev
+        trajectory = ema3_ok(ema_traj_vals, idx, "long")
+        touched    = bar_low <= ema_touch_i
+        rsi_ok     = rsi_i > bull_rsi
     else:
-        touched = bar_high >= ema_touch_i - eps
+        aligned    = close_prev < ema_touch_prev
+        trajectory = ema3_ok(ema_traj_vals, idx, "short")
+        touched    = bar_high >= ema_touch_i
+        rsi_ok     = rsi_i < bear_rsi
 
-    if not touched or not touch_allowed:
-        return False
-
-    return True
+    return aligned and trajectory and touched and rsi_ok
 
 
 def get_a1_sl(direction: str, entry_price: float,
@@ -1009,10 +1009,9 @@ def detect_signal(state: dict, symbol: str, bundle: DataBundle,
     bar_regime   = str(bar.get("regime", "UNKNOWN"))
     bar_session  = str(bar.get("session", "none"))
 
-    # Step 1: Session gate — per-instrument trading hours
-    t_start, t_end = get_trading_hours(symbol)
+    # Step 1: Session gate — per-instrument trading windows
     bar_hour = bar["time_utc"].hour
-    if not (t_start <= bar_hour < t_end):
+    if not is_in_trading_window(symbol, bar_hour):
         skip_reason = "SESSION_SKIP"
         _log_signal_replay(symbol, bar, None, None, None, False, skip_reason, df_1h)
         return None
@@ -1037,9 +1036,15 @@ def detect_signal(state: dict, symbol: str, bundle: DataBundle,
             _log_signal_replay(symbol, bar, None, None, None, False, skip_reason, df_1h)
             return None
 
-    # Step 4: Pullback filter removed — A1 pullback gate is handled during trigger-first dispatch.
-    # (A1 invalid when entry_dir_a1 ≠ trend_dir_1h; A2 uses 1H direction so it can
-    #  fire in the 1H direction even when 15m is counter-trend)
+    trend_dir_1h = "long" if st_1h_dir == 1 else "short"
+    entry_dir_15m = "long" if st_15m_dir == 1 else "short"
+
+    # Step 4: No-countertrend contract. Phase studies assume entries only when
+    # entry-TF direction aligns with context direction unless explicitly enabled.
+    if not countertrend_enabled(symbol) and entry_dir_15m != trend_dir_1h:
+        skip_reason = "COUNTERTREND_BLOCKED"
+        _log_signal_replay(symbol, bar, None, None, None, False, skip_reason, df_1h)
+        return None
 
     # Step 5: Trigger-first hypothesis dispatch.
     # B keeps top priority, matching the phase2-rework A2+B baseline.
@@ -1067,8 +1072,7 @@ def detect_signal(state: dict, symbol: str, bundle: DataBundle,
     touch_allowed = len([t for t in state.get("open_trades", []) if t["symbol"] == symbol]) == 0  # A1 flicker suppression — per symbol
 
     if hyp is None:
-        trend_dir_1h = "long" if st_1h_dir == 1 else "short"
-        entry_dir_a1 = "long" if st_15m_dir == 1 else "short"
+        entry_dir_a1 = entry_dir_15m
         a2_dir = trend_dir_1h
 
         a1_fired = False

@@ -147,33 +147,93 @@ def is_trail_enabled() -> bool:
     return config.get("trail", {}).get("enabled", False)
 
 
-def get_st_config(symbol: str) -> dict:
-    """
-    Return effective SuperTrend params for a given symbol.
-    Merges global st_period/st_multiplier with instruments.<symbol>.overrides
-    (st_period or st_multiplier keys at the instrument level, not under hyp_*).
-    """
-    base = {
+def _legacy_st_config() -> dict:
+    return {
         "st_period"     : config.get("st_period", 12),
         "st_multiplier" : config.get("st_multiplier", 3.0),
     }
+
+
+def _normalise_st_config(raw: dict) -> dict:
+    return {
+        "st_period"     : raw.get("period", raw.get("st_period", 12)),
+        "st_multiplier" : raw.get("multiplier", raw.get("st_multiplier", 3.0)),
+    }
+
+
+def get_st_config(symbol: str, timeframe: str = "entry") -> dict:
+    """
+    Return effective SuperTrend params for a symbol/timeframe.
+
+    Supports the granular shape:
+      indicators.entry.supertrend / indicators.context.supertrend
+      instruments.<symbol>.overrides.indicators.<timeframe>.supertrend
+
+    Backward compatible with legacy top-level st_period/st_multiplier and
+    instruments.<symbol>.overrides.st_period/st_multiplier.
+    """
+    tf_key = "context" if timeframe in ("context", "h1", "1h") else "entry"
+    indicators = config.get("indicators", {}) or {}
+    base = _legacy_st_config()
+    base.update(_normalise_st_config(
+        ((indicators.get(tf_key, {}) or {}).get("supertrend", {}) or {})
+    ))
+
     overrides = (config.get("instruments", {})
                        .get(symbol, {})
                        .get("overrides", {}) or {})
+    inst_indicators = overrides.get("indicators", {}) or {}
+    base.update(_normalise_st_config(
+        ((inst_indicators.get(tf_key, {}) or {}).get("supertrend", {}) or {})
+    ))
+
+    # Legacy per-instrument override applies to both TFs when granular keys are absent.
     base.update({k: v for k, v in overrides.items()
                  if k in ("st_period", "st_multiplier")})
     return base
 
 
-def get_trading_hours(symbol: str) -> tuple:
+def get_trading_windows(symbol: str) -> list[tuple[int, int]]:
     """
-    Return (start_utc, end_utc) for per-instrument trading session gate.
-    Default [7, 21] = London + NY (EURUSD).
-    Override per instrument via instruments.<symbol>.trading_hours: [start, end].
+    Return half-open UTC windows [(start_hour, end_hour), ...].
+
+    Preferred config: instruments.<symbol>.trading_windows: [[0, 7], [11], [13, 21]]
+    Single-hour shorthand [11] means [11, 12].
+    Backward compatible with instruments.<symbol>.trading_hours: [start, end].
     """
     inst  = config.get("instruments", {}).get(symbol, {})
-    hours = inst.get("trading_hours", [7, 21])
-    return int(hours[0]), int(hours[1])
+    windows = inst.get("trading_windows")
+    if windows is None:
+        windows = [inst.get("trading_hours", [7, 21])]
+
+    out = []
+    for window in windows:
+        if len(window) == 1:
+            start = int(window[0])
+            out.append((start, start + 1))
+            continue
+        if len(window) == 2:
+            out.append((int(window[0]), int(window[1])))
+            continue
+        raise ValueError(f"instruments.{symbol}.trading_windows entries must be [start] or [start, end], got {window}")
+    return out
+
+
+def get_trading_hours(symbol: str) -> tuple:
+    """Legacy accessor: returns the first configured trading window."""
+    return get_trading_windows(symbol)[0]
+
+
+def is_in_trading_window(symbol: str, hour_utc: int) -> bool:
+    return any(start <= hour_utc < end for start, end in get_trading_windows(symbol))
+
+
+def countertrend_enabled(symbol: str) -> bool:
+    global_cfg = config.get("countertrend_trades", {}) or {}
+    inst_cfg = (config.get("instruments", {})
+                      .get(symbol, {})
+                      .get("countertrend_trades", {}) or {})
+    return {**global_cfg, **inst_cfg}.get("enabled", False)
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +259,17 @@ def validate_config():
 
         if "pip_size" not in inst_cfg:
             errors.append(f"instruments.{symbol}: pip_size missing")
+
+        for start, end in get_trading_windows(symbol):
+            if not (0 <= start < end <= 24):
+                errors.append(f"instruments.{symbol}.trading_windows invalid [{start}, {end}]")
+
+        for tf in ("entry", "context"):
+            st_cfg = get_st_config(symbol, tf)
+            if int(st_cfg.get("st_period", 0)) < 1:
+                errors.append(f"instruments.{symbol}.{tf}.supertrend period must be >= 1")
+            if float(st_cfg.get("st_multiplier", 0)) <= 0:
+                errors.append(f"instruments.{symbol}.{tf}.supertrend multiplier must be > 0")
 
         # Validate effective hypothesis configs
         for hyp in ("a1", "a2", "b"):
@@ -292,11 +363,13 @@ def print_config_summary():
         a1_str = f"A1({'ON' if a1.get('enabled') else 'OFF'})"
         a2_str = f"A2({'ON' if a2.get('enabled') else 'OFF'})"
         b_str  = f"B({'ON' if b.get('enabled') else 'OFF'})"
-        t_start, t_end = get_trading_hours(symbol)
-        st_cfg = get_st_config(symbol)
+        windows = ",".join(f"{s:02d}-{e:02d}" for s, e in get_trading_windows(symbol))
+        st_entry = get_st_config(symbol, "entry")
+        st_ctx = get_st_config(symbol, "context")
         print(f"    {symbol:<8} {mode.upper():<6}  pip={pip}  {a1_str} {a2_str} {b_str}"
-              f"  hours={t_start:02d}-{t_end:02d}UTC"
-              f"  ST({st_cfg['st_period']},{st_cfg['st_multiplier']})")
+              f"  windows={windows}UTC"
+              f"  ST(entry={st_entry['st_period']},{st_entry['st_multiplier']}"
+              f" context={st_ctx['st_period']},{st_ctx['st_multiplier']})")
     print(f"{'─'*50}\n")
 
 
