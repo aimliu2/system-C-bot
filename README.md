@@ -1,0 +1,372 @@
+# System C Bot V2
+
+System C Bot V2 is the portfolio runtime for the April 2026 Option A deployment.
+It replaces the old single-symbol/sequential-state bot with a portfolio loop:
+
+```text
+all symbols produce candidates
+portfolio reducer decides final entries
+MT5 executes sequentially
+state/logs update coherently
+```
+
+The current runtime is live-enabled. Treat this repository state as capable of
+sending real MT5 orders when `run_orders_vps.py` or `run_orders_rpyc.py` is run
+without `--dry-run`.
+
+## Features
+
+- V2 runtime config loader that ignores stale root `config.yaml`.
+- Four-symbol portfolio deployment: `AUDUSD`, `EURJPY`, `EURUSD`, `USDJPY`.
+- Per-symbol YAML configs copied into `bot/config/`.
+- Bot-local copy of the needed backtester engine under `runtime/engine/`.
+- Closed-bar MT5 data cache with 500-bar startup warmup and delta updates.
+- Numba-backed indicator rebuild path for SuperTrend/features.
+- Mixed-timeframe support by symbol and branch.
+- Per-symbol staged engine state, with portfolio-owned open trades.
+- Portfolio reducer with portfolio cap and symbol cap checks.
+- Native MT5 and RPyC MT5 adapters.
+- Live order execution guarded by config.
+- V2 trade/event/signal/candidate/reducer/snapshot/timing/state-audit logs.
+- GPS reports for rolling portfolio health.
+- Telegram notification boundary for live trade opens.
+- Fresh V2 live and paper state files plus backup templates.
+
+## Current Deployment
+
+Active config:
+
+```text
+bot/config/config.yaml
+```
+
+Current deployment id:
+
+```text
+portfolio_option_a_202604
+```
+
+Current symbols:
+
+```text
+AUDUSD
+EURJPY
+EURUSD
+USDJPY
+```
+
+Current portfolio setup:
+
+```text
+portfolio cap: 2 concurrent trades
+risk per trade: 0.4%
+CB anchor: disabled, monitor-only
+Highwind: disabled, monitor-only
+Rule 2: enabled
+parallel symbol evaluation: disabled
+```
+
+Current runtime gates:
+
+```yaml
+paper_mode: false
+
+execution:
+  live_order_enabled: true
+
+notifications:
+  enabled: true
+  paper_trades: false
+  live_trades: true
+```
+
+That means live order sending is armed. Paper/shadow mode is not the current
+default.
+
+## Expected Performance
+
+The deployment baseline is Option A clean raw deployment.
+
+Source:
+
+```text
+docs/portfolio-study/202604-portfolio_deployment.md
+bot/config/config.yaml gps.seed_baseline
+```
+
+Historical reference:
+
+```text
+total R:        534.0R
+EV/trade:        0.0766R
+max DD:         38.5R
+R/DD:           13.87
+worst month:   -22.5R
+monthly std:    11.86R
+```
+
+Account-level drawdown translation from the portfolio deployment note:
+
+```text
+0.4% risk/trade -> historical DD about 15.4%
+0.4% risk/trade with 2x stress -> about 30.8%
+```
+
+GPS begins as `GRAY` because the new live deployment has no closed live trade
+rows yet. Once closed trades accumulate, GPS reads the trade log and writes:
+
+```text
+logs/portfolio_option_a_202604/gps/rolling_window_metrics.csv
+logs/portfolio_option_a_202604/gps/rolling_gps_report.md
+logs/portfolio_option_a_202604/gps/frontier_drift_report.md
+```
+
+The GPS windows are:
+
+```text
+3m
+6m
+12m
+24m
+full
+```
+
+Classification intent:
+
+```text
+GRAY   not enough closed live trades yet
+GREEN  live rolling shape remains inside guardrails
+YELLOW degraded versus interim seed guardrails, review soon
+RED    severe degradation, pause/reduce/stop and review
+```
+
+## Config Locations
+
+Runtime portfolio config:
+
+```text
+bot/config/config.yaml
+```
+
+Symbol configs:
+
+```text
+bot/config/AUDUSD.yaml
+bot/config/EURJPY.yaml
+bot/config/EURUSD.yaml
+bot/config/USDJPY.yaml
+```
+
+Secrets:
+
+```text
+bot/.ennv
+```
+
+V2 runtime code:
+
+```text
+bot/runtime/
+```
+
+Legacy V1 files:
+
+```text
+bot/lecagy/
+```
+
+The old root `bot/config.yaml`, root `config_loader.py`, root `notifier.py`,
+and root `run_data.py` are retired from the V2 active path.
+
+## Live, Shadow, Notifications
+
+To run live:
+
+```yaml
+paper_mode: false
+
+execution:
+  live_order_enabled: true
+```
+
+To run shadow/paper with real MT5 data but no live orders:
+
+```yaml
+paper_mode: true
+
+execution:
+  live_order_enabled: false
+```
+
+To disable all Telegram notifications:
+
+```yaml
+notifications:
+  enabled: false
+  paper_trades: false
+  live_trades: true
+```
+
+To enable live trade-open notifications only:
+
+```yaml
+notifications:
+  enabled: true
+  paper_trades: false
+  live_trades: true
+```
+
+To enable paper/shadow notifications too:
+
+```yaml
+notifications:
+  enabled: true
+  paper_trades: true
+  live_trades: true
+```
+
+## Running The Bot
+
+Native MT5 VPS runner:
+
+```bash
+cd bot
+PYTHONDONTWRITEBYTECODE=1 python3 run_orders_vps.py
+```
+
+RPyC bridge runner:
+
+```bash
+cd bot
+PYTHONDONTWRITEBYTECODE=1 python3 run_orders_rpyc.py
+```
+
+One-loop dry run with no MT5 connection and no orders:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 run_orders_vps.py --dry-run --once
+PYTHONDONTWRITEBYTECODE=1 python3 run_orders_rpyc.py --dry-run --once
+```
+
+Stop a continuous runner by creating the kill file:
+
+```text
+bot/STOP
+```
+
+The runner checks this file between loops.
+
+## Status And Performance Review
+
+Verify config and both V2 states:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 status.py --verify
+```
+
+View active state. This follows `paper_mode`:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 status.py
+```
+
+View live state explicitly:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 status.py --live
+```
+
+View paper state explicitly:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 status.py --paper
+```
+
+Minimal GPS/log/performance query:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 status.py --gps-check
+```
+
+Live GPS query:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 status.py --live --gps-check
+```
+
+`--gps-check` answers:
+
+```text
+which state is active
+last GPS status from state diagnostics
+seed baseline when live trade rows are empty
+trade log freshness and schema readiness
+event/signal/candidate/reducer/snapshot/timing/state-audit freshness
+GPS report file paths and freshness
+current interim conclusion
+review action suggestion
+```
+
+To decide if the portfolio has degraded, check:
+
+```text
+current_interim_status.status
+current_interim_status.reason
+current_interim_status.review_action
+closed_trades
+total_r
+max_dd_r
+worst_month_r
+symbols
+```
+
+With no closed live trades, the expected answer is:
+
+```text
+status: GRAY
+reason: Seed baseline only; no live portfolio trades logged yet.
+review_action: Collect live trade rows before making portfolio-level judgment.
+```
+
+After trades accumulate, status compares the live trade log against the seed
+guardrails and the GPS reports.
+
+## State Recovery
+
+V2 active states:
+
+```text
+bot/state_live_portfolio_v2.json
+bot/state_paper_portfolio_v2.json
+```
+
+Templates:
+
+```text
+bot/state/state_live_portfolio_v2.template.json
+bot/state/state_paper_portfolio_v2.template.json
+```
+
+Restore paper state:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 status.py --restore-paper
+```
+
+Restore live state:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 status.py --restore-live
+```
+
+Live restore asks for confirmation.
+
+## Important Notes
+
+- V2 does not migrate old state.
+- V2 logs are a fresh deployment series under `logs/portfolio_option_a_202604/`.
+- CB and Highwind are not active controls in this launch.
+- `status.py` is observation-first. Legacy reset/highwind/rescale controls are
+  intentionally unavailable in V2.
+- Live Telegram notification fires only after the trade state and trade log row
+  are recorded.

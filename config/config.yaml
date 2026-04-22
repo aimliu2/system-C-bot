@@ -1,0 +1,175 @@
+# System C portfolio runtime config
+# New portfolio deployment config for architecture v2.
+# Legacy bot/config.yaml is stale and should not drive this deployment.
+
+deployment:
+  id: portfolio_option_a_202604
+  symbols:
+    - AUDUSD
+    - EURJPY
+    - EURUSD
+    - USDJPY
+  symbol_config_dir: bot/config
+
+portfolio:
+  max_concurrent_live_trades: 2
+  base_risk_pct: 0.5
+
+paper_mode: false
+
+state:
+  live_file: state_live_portfolio_v2.json
+  paper_file: state_paper_portfolio_v2.json
+  fresh_deployment: true
+  migrate_legacy_state: false
+  block_startup_on_existing_live_positions: true
+  backup_template_dir: state
+  atomic_writes: true
+  isolation:
+    mode: per_symbol_engine_state
+    portfolio_open_trades_owner: portfolio
+    symbol_state_mutation: staged_only
+    commit_policy: after_reducer_and_execution
+    enforce_symbol_state_keys: true
+    reject_legacy_state_keys: true
+
+logs:
+  reset_on_deployment: true
+  base_dir: logs/portfolio_option_a_202604
+  trade_log: trades_{YYYYMM}.csv
+  event_log: events_{YYYYMM}.csv
+  signal_log: signals_{YYYYMM}.csv
+  candidate_log: candidates_{YYYYMM}.csv
+  reducer_log: reducer_{YYYYMM}.csv
+  snapshot_log: snapshot_{YYYYMM}.csv
+  timing_log: timing_{YYYYMM}.csv
+  state_audit_log: state_audit_{YYYYMM}.csv
+  gps_dir: gps
+
+runtime:
+  poll_interval_seconds: 5
+  heartbeat_minutes: 15
+  kill_file: STOP
+  parallel_symbol_eval: false
+  max_symbol_workers: 4
+
+performance:
+  slow_symbol_eval_ms: 2000
+  slow_portfolio_loop_ms: 5000
+  csv_fsync_enabled: false
+  csv_fsync_deferred_logs: [trade, state_audit]
+
+execution:
+  live_order_enabled: true
+  deviation_points: 10
+  lot_rounding: floor_to_step
+  fill_price_fallback: requested_price
+
+notifications:
+  enabled: true
+  paper_trades: false
+  live_trades: true
+
+clocks:
+  broker_poll_seconds_with_open_trades: 60
+  broker_poll_seconds_idle: 60
+  entry_bar_grace_seconds: 5
+  indicator_rebuild: on_entry_bar_close
+  entry_decision: closed_entry_bar
+  execution_monitor: broker_poll
+  execution_timeframe: 1min
+  minimum_resolution: 1min
+  context_merge: asof_closed_bar_only
+  mixed_symbol_timeframes: true
+  latest_closed_bar_probe_bars: 2
+  latest_closed_bar_position: penultimate
+
+data:
+  startup_bars:
+    entry: 500
+    context: 500
+    execution_1min: 500
+  running_bars:
+    entry: 250
+    context: 500
+    execution_1min: 256
+  cache:
+    enabled: true
+    warm_on_startup: true
+    update_mode: closed_bar_delta
+    latest_bar_probe_bars: 2
+    fetch_overlap_bars: 2
+    max_retained_bars:
+      1min: 720
+      5m: 600
+      15m: 600
+      1h: 600
+      4h: 600
+    rebuild_features_from_cache: true
+    rebuild_only_when_updated: true
+    persist_to_disk: false
+  min_bars_by_timeframe:
+    1min: 500
+    5m: 500
+    15m: 500
+    1h: 500
+    4h: 500
+  pull_only_on_closed_entry_bar: true
+  pull_context_only_when_entry_due: true
+  include_forming_bar_in_decisions: false
+
+indicators:
+  backend: numba
+  compile_on_startup: true
+  supertrend_backend: numba
+  fallback_to_python: false
+  warmup_policy: configured_window
+  warmup_validation: require_non_nan_latest
+
+mt5:
+  env_file: .ennv
+  magic_number: 20260414
+  order_comment_format: "SysC-{session}-{strategyName}"
+  timeout_comment: SysC-timeout
+
+intervention:
+  highwind:
+    enabled: false
+    monitor_only: true
+  cb_anchor:
+    enabled: false
+    monitor_only: true
+  rule2:
+    enabled: true
+
+risk_controls:
+  max_hold_bars: 32
+  account_guardrails_enabled: true
+  spread_check_enabled: true
+  stop_distance_check_enabled: true
+
+gps:
+  enabled: true
+  advisory_only: true
+  loop_interval_seconds: 300
+  run_on_trade_close: true
+  rolling_windows_months: [3, 6, 12, 24]
+  include_full_history: true
+  min_trade_count: 30
+  seed_baseline:
+    label: "Option A clean raw deployment"
+    status: GRAY
+    reason: "Seed baseline only; no live portfolio trades logged yet."
+    total_r: 534.0
+    ev_per_trade_r: 0.0766
+    max_dd_r: 38.5
+    r_over_dd: 13.87
+    worst_month_r: -22.5
+    monthly_std_r: 11.86
+    symbols: [AUDUSD, EURJPY, EURUSD, USDJPY]
+    portfolio_cap: 2
+    base_risk_pct: 0.4
+  reports:
+    rolling_window_metrics: rolling_window_metrics.csv
+    rolling_gps_report: rolling_gps_report.md
+    frontier_drift_report: frontier_drift_report.md

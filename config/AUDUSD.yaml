@@ -1,0 +1,162 @@
+symbol: AUDUSD
+
+# Session boundaries (UTC hours, half-open [start, end)).
+# AUDUSD is an AUD/USD pair — Sydney and Asian sessions are active and may carry
+# real edge (unlike EURUSD where Asian is low-volatility dead time).
+# Sydney wraps midnight so two sub-ranges: sydney_pre [22,0) + sydney_post [0,7)
+# are captured together under "asian" for simplicity — let Round 3 data decide.
+sessions:
+  sydney:    [22,  0]  # 22–00 UTC — Sydney pre-midnight
+  asian:     [0,   7]  # 00–07 UTC — Tokyo / Sydney post-midnight
+  london:    [7,  12]  # 07–12 UTC
+  london_ny: [12, 17]  # 12–17 UTC
+  ny:        [17, 22]  # 17–22 UTC (NY close ~21:00; extended to 22 to avoid gap)
+
+data:
+  root: big-data/mlData/raw
+  file_pattern: "{symbol}-sorted-{timeframe}.parquet"
+
+timeframes:
+  execution: 1min
+
+mechanics:
+  # precomputed in features.py — change these only if regenerating features
+  ema_touch: 20           # EMA period used to compute ema20 column
+  ema_traj: 3             # EMA period used to compute ema3 column
+  rsi_period: 30          # RSI period used to compute rsi30 column
+  context_stable_bars: 3  # consecutive bars for context ST stability flag
+  # live config — read by engine/strategy at runtime
+  of_depth_a2: 4          # pivot lookback depth for A2 OF gate
+  of_min_a2: 2            # minimum pivots required for A2 OF gate
+  pivot_maxlen: 8         # max pivots stored in pivot array
+
+hypotheses:
+  A1:
+    enabled: true
+    trigger_mode: st_touch     # ema20_touch = touch EMA20 + clean_approach + bounce (default)
+                               # ema20_rsi_v2 = ema20_touch + RSI gate
+                               # st_touch = touch ST line ± 3pip + bounce, no clean_approach (V7 style)
+    ema3_slope_mode: lax   # lax: ema3[n-2] > ema3[n]; strict: ema3[n-2] > ema3[n-1] > ema3[n] (inverse for shorts)
+    sl_mode: fixed_12pip
+    rr: 1.5
+    session_gate: false        # OFF for Round 1 — session filter is Step 4 work
+    allowed_sessions: [sydney, asian, london, london_ny, ny]   # active when session_gate: true — A1 positive everywhere at 15m
+    pullback_gate: true        # ON — core hypothesis constraint (trend-following entry)
+    flicker_suppression: own_hypothesis
+    rsi_gate_enabled: false
+    rsi_bull_gate: 55.0
+    rsi_bear_gate: 48.0
+  A2:
+    enabled: true
+    session_gate: true         # ON — edge confirmed in asian+london (Round 3 Pass 2)
+    allowed_sessions: [asian, london]   # confirmed sessions for A2
+    pullback_gate: true        # ON — core hypothesis constraint
+    flicker_suppression: own_hypothesis
+    of_direction_mode: lax   # lax = trust context TF direction (1H/4H/etc, phase-agnostic)
+                              # strict = OF must be self-evident from pivot HH+HL pattern
+                              #          ambiguous or insufficient pivots → skip trade
+    pd_level: 0.51           # pullback depth to enter: 0.51 = 51%, 0.618 = 61.8%, etc.
+    sl_min: 0.0015           # 15 pip floor on pivot-clamped SL (AUDUSD pip = 0.0001)
+    sl_max: 0.0025           # 25 pip cap — AUDUSD wider spread than EURUSD (vs 20pip there)
+    sl_epsilon: 0.0003       # 3 pip buffer beyond last pivot extreme
+    rr: 1.5
+  B:
+    enabled: true
+    session_gate: true         # ON — edge confirmed in NY only (Round 3 Pass 2)
+    allowed_sessions: [ny]   # confirmed session for B
+    pullback_gate: false
+    flicker_suppression: own_hypothesis
+    sl_fixed: 0.0025         # 25 pip fixed SL — AUDUSD wider spread (vs 20pip for EURUSD)
+    rr: 2.0
+
+execution:
+  policy: policy3
+  require_context_stable: true
+  cooldown_enabled: false
+  cooldown_bars: 6
+  max_concurrent_positions_per_symbol: 1
+  same_bar_priority: [B, A2, A1]
+  policy3:
+    allow_any_direction_stack: true
+    allow_same_bar_overlap: false
+  policy2:
+    trigger_first: true
+
+combos:
+  A1 only: [A1]
+  A2 only: [A2]
+  B only: [B]
+  A1+B: [A1, B]
+  A2+B: [A2, B]
+  A1+A2+B: [A1, A2, B]
+
+cross_phase:
+  enabled: true
+  branches:
+    A1:
+      enabled: true
+      phase: phase3    # Round 3 winner: 15m/1H ST(12,3), ev=+0.054R, no session gate
+    A2:
+      enabled: true
+      phase: phase2    # Round 3 winner: 5m/1H ST(11,2), ev=+0.239R, gate=asian+london
+    B:
+      enabled: true
+      phase: phase2    # Round 3 winner: 5m/1H ST(11,2), ev=+0.172R, gate=ny
+  same_bar_priority: [B, A2, A1]
+  max_concurrent_positions_per_symbol: 1
+
+architecture_phases:
+  phase1:
+    label: 5m ST(12,3) entry vs 1H ST(12,3) context
+    entry_timeframe: 5m
+    context_timeframe: 1h
+    entry_st: {period: 12, multiplier: 3.0}
+    context_st: {period: 12, multiplier: 3.0}
+  phase2:
+    label: 5m ST(12,3) entry vs 1H ST(11,2) context
+    entry_timeframe: 5m
+    context_timeframe: 1h
+    entry_st: {period: 12, multiplier: 3.0}
+    context_st: {period: 11, multiplier: 2.0}
+  phase3:
+    label: 15m ST(12,3) entry vs 1H ST(12,3) context
+    entry_timeframe: 15m
+    context_timeframe: 1h
+    entry_st: {period: 12, multiplier: 3.0}
+    context_st: {period: 12, multiplier: 3.0}
+  phase4:
+    label: 15m ST(11,2) entry vs 1H ST(12,3) context
+    entry_timeframe: 15m
+    context_timeframe: 1h
+    entry_st: {period: 11, multiplier: 2.0}
+    context_st: {period: 12, multiplier: 3.0}
+  phase5:
+    label: 15m ST(11,2) entry vs 1H ST(11,2) context
+    entry_timeframe: 15m
+    context_timeframe: 1h
+    entry_st: {period: 11, multiplier: 2.0}
+    context_st: {period: 11, multiplier: 2.0}
+  phase6:
+    label: 15m ST(12,3) entry vs 4H ST(12,3) context
+    entry_timeframe: 15m
+    context_timeframe: 4h
+    entry_st: {period: 12, multiplier: 3.0}
+    context_st: {period: 12, multiplier: 3.0}
+  phase7:
+    label: 15m ST(11,2) entry vs 4H ST(12,3) context
+    entry_timeframe: 15m
+    context_timeframe: 4h
+    entry_st: {period: 11, multiplier: 2.0}
+    context_st: {period: 12, multiplier: 3.0}
+  phase8:
+    label: 15m ST(11,2) entry vs 4H ST(11,2) context
+    entry_timeframe: 15m
+    context_timeframe: 4h
+    entry_st: {period: 11, multiplier: 2.0}
+    context_st: {period: 11, multiplier: 2.0}
+
+deployment:
+  selected_phase: phase3    # portfolio-selected cross-phase anchor: A1@phase3, A2/B@phase2
+  selected_combo: A1+A2+B
+
+regime_gate: {}

@@ -1,0 +1,160 @@
+symbol: USDJPY
+
+# Session boundaries (UTC hours, half-open [start, end)).
+# USDJPY is driven by two centres: JPY (Asian/Tokyo) and USD (NY + London/NY overlap).
+# Asian is highly active (JPY-primary); NY and London/NY overlap are active (USD-primary).
+# London alone is moderate. Overnight is the quietest window.
+sessions:
+  overnight: [21,  0]  # 21–00 UTC — quietest window
+  asian:     [0,   7]  # 00–07 UTC — Tokyo very active, JPY primary
+  london:    [7,  12]  # 07–12 UTC — moderate for USDJPY
+  london_ny: [12, 17]  # 12–17 UTC — USD picks up, NY open
+  ny:        [17, 21]  # 17–21 UTC — USD primary mover
+
+data:
+  root: big-data/mlData/raw
+  file_pattern: "{symbol}-sorted-{timeframe}.parquet"
+
+timeframes:
+  execution: 1min
+
+mechanics:
+  # precomputed in features.py — change these only if regenerating features
+  ema_touch: 20           # EMA period used to compute ema20 column
+  ema_traj: 3             # EMA period used to compute ema3 column
+  rsi_period: 30          # RSI period used to compute rsi30 column
+  context_stable_bars: 3  # consecutive bars for context ST stability flag
+  # live config — read by engine/strategy at runtime
+  of_depth_a2: 4          # pivot lookback depth for A2 OF gate
+  of_min_a2: 2            # minimum pivots required for A2 OF gate
+  pivot_maxlen: 8         # max pivots stored in pivot array
+
+hypotheses:
+  A1:
+    enabled: true
+    trigger_mode: ema20_touch   # touch EMA20 + clean_approach + bounce
+    ema3_slope_mode: lax        # lax: ema3[n-2] > ema3[n]; strict: full monotone chain
+    sl_mode: ema20_st_pocket    # pocket-width clamped to [a1_sl_min, a1_sl_max]
+    a1_sl_min: 0.15             # 15 pip floor (USDJPY pip = 0.01)
+    a1_sl_max: 0.25             # 25 pip cap
+    rr: 1.5
+    session_gate: true          # ON for deployment: cross-phase gated candidate
+    allowed_sessions: [asian, london_ny]  # R3P2: asian+london_ny only (london neutral +0.003, ny/overnight ❌)
+    pullback_gate: true         # ON — core hypothesis constraint
+    flicker_suppression: own_hypothesis
+    rsi_gate_enabled: false
+    rsi_bull_gate: 55.0
+    rsi_bear_gate: 48.0
+  A2:
+    enabled: true
+    session_gate: true          # ON for deployment: cross-phase gated candidate
+    allowed_sessions: [asian, london, london_ny]  # R3P2: drop ny (−0.500) and overnight (−1.000)
+    pullback_gate: true         # ON — core hypothesis constraint
+    flicker_suppression: own_hypothesis
+    of_direction_mode: lax      # lax = trust context TF direction
+    pd_level: 0.51              # pullback depth to enter: 51%
+    sl_min: 0.15                # 15 pip floor (USDJPY pip = 0.01)
+    sl_max: 0.25                # 25 pip cap
+    sl_epsilon: 0.03            # 3 pip buffer beyond last pivot extreme
+    rr: 1.5
+  B:
+    enabled: true
+    session_gate: true          # ON for deployment: cross-phase gated candidate
+    allowed_sessions: [asian, london_ny, ny]  # Step4.5: ph7 B gate — asian+london_ny+ny (overnight ❌); ph3 gate was [asian,london]
+    pullback_gate: false
+    flicker_suppression: own_hypothesis
+    sl_fixed: 0.25              # 25 pip fixed SL (USDJPY pip = 0.01)
+    rr: 2.0
+
+execution:
+  policy: policy3
+  require_context_stable: true
+  cooldown_enabled: false
+  cooldown_bars: 6
+  max_concurrent_positions_per_symbol: 1
+  same_bar_priority: [B, A2, A1]
+  policy3:
+    allow_any_direction_stack: true
+    allow_same_bar_overlap: false
+  policy2:
+    trigger_first: true
+
+combos:
+  A1 only: [A1]
+  A2 only: [A2]
+  B only: [B]
+  A1+B: [A1, B]
+  A2+B: [A2, B]
+  A1+A2+B: [A1, A2, B]
+
+cross_phase:
+  enabled: true   # Step 4.5 active
+  branches:
+    A1:
+      enabled: true
+      phase: phase3   # only viable A1 home: ev=+0.043 gated
+    A2:
+      enabled: true
+      phase: phase3   # only viable A2 home: ev=+0.284 gated
+    B:
+      enabled: true
+      phase: phase7   # strongest B: ev=+0.133 ungated, sessions=[asian,london_ny,ny]
+  same_bar_priority: [B, A2, A1]
+  max_concurrent_positions_per_symbol: 1
+
+architecture_phases:
+  phase1:
+    label: 5m ST(12,3) entry vs 1H ST(12,3) context
+    entry_timeframe: 5m
+    context_timeframe: 1h
+    entry_st: {period: 12, multiplier: 3.0}
+    context_st: {period: 12, multiplier: 3.0}
+  phase2:
+    label: 5m ST(12,3) entry vs 1H ST(11,2) context
+    entry_timeframe: 5m
+    context_timeframe: 1h
+    entry_st: {period: 12, multiplier: 3.0}
+    context_st: {period: 11, multiplier: 2.0}
+  phase3:
+    label: 15m ST(12,3) entry vs 1H ST(12,3) context
+    entry_timeframe: 15m
+    context_timeframe: 1h
+    entry_st: {period: 12, multiplier: 3.0}
+    context_st: {period: 12, multiplier: 3.0}
+  phase4:
+    label: 15m ST(11,2) entry vs 1H ST(12,3) context
+    entry_timeframe: 15m
+    context_timeframe: 1h
+    entry_st: {period: 11, multiplier: 2.0}
+    context_st: {period: 12, multiplier: 3.0}
+  phase5:
+    label: 15m ST(11,2) entry vs 1H ST(11,2) context
+    entry_timeframe: 15m
+    context_timeframe: 1h
+    entry_st: {period: 11, multiplier: 2.0}
+    context_st: {period: 11, multiplier: 2.0}
+  phase6:
+    label: 15m ST(12,3) entry vs 4H ST(12,3) context
+    entry_timeframe: 15m
+    context_timeframe: 4h
+    entry_st: {period: 12, multiplier: 3.0}
+    context_st: {period: 12, multiplier: 3.0}
+  phase7:
+    label: 15m ST(11,2) entry vs 4H ST(12,3) context
+    entry_timeframe: 15m
+    context_timeframe: 4h
+    entry_st: {period: 11, multiplier: 2.0}
+    context_st: {period: 12, multiplier: 3.0}
+  phase8:
+    label: 15m ST(11,2) entry vs 4H ST(11,2) context
+    entry_timeframe: 15m
+    context_timeframe: 4h
+    entry_st: {period: 11, multiplier: 2.0}
+    context_st: {period: 11, multiplier: 2.0}
+
+deployment:
+  # Portfolio-selected cross-phase candidate: A1/A2@phase3, B@phase7.
+  selected_phase: phase3
+  selected_combo: A1+A2+B
+
+regime_gate: {}
