@@ -5,7 +5,8 @@ __pycache__/
 docs/*
 start_bridge.sh
 logs/*
-*.json
+state_live_portfolio_v2.json
+state_paper_portfolio_v2.json
 
 # C extensions
 *.so

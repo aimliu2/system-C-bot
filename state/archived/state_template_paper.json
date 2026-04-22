@@ -1,0 +1,113 @@
+{
+  "_comment": "System C state template — global paper mode",
+  "_version": "1.0",
+  "open_trades": [],
+  "instrument_modes": {
+    "EURUSD": "paper",
+    "GBPUSD": "disabled",
+    "GBPJPY": "paper",
+    "AUDUSD": "paper"
+  },
+  "instrument_highwind": {
+    "EURUSD": {
+      "window": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "level": "NORMAL",
+      "halt_since": null
+    },
+    "GBPUSD": {
+      "window": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "level": "L1",
+      "halt_since": null
+    },
+    "GBPJPY": {
+      "window": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "level": "NORMAL",
+      "halt_since": null
+    },
+    "AUDUSD": {
+      "window": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "level": "NORMAL",
+      "halt_since": null
+    }
+  },
+  "hypothesis_states": {
+    "EURUSD": {
+      "choch_confirmed": false,
+      "choch_direction": null,
+      "choch_level": null,
+      "in_cooldown": false,
+      "bars_since_sl": 0,
+      "new_extreme_flag": false,
+      "sb_used": false
+    },
+    "GBPUSD": {
+      "choch_confirmed": false,
+      "choch_direction": null,
+      "choch_level": null,
+      "in_cooldown": false,
+      "bars_since_sl": 0,
+      "new_extreme_flag": false,
+      "sb_used": false
+    },
+    "GBPJPY": {
+      "choch_confirmed": false,
+      "choch_direction": null,
+      "choch_level": null,
+      "in_cooldown": false,
+      "bars_since_sl": 0,
+      "new_extreme_flag": false,
+      "sb_used": false
+    },
+    "AUDUSD": {
+      "choch_confirmed": false,
+      "choch_direction": null,
+      "choch_level": null,
+      "in_cooldown": false,
+      "bars_since_sl": 0,
+      "new_extreme_flag": false,
+      "sb_used": false
+    }
+  },
+  "pivot_arrays": {
+    "EURUSD": [],
+    "GBPUSD": [],
+    "GBPJPY": [],
+    "AUDUSD": []
+  },
+  "cb_anchor": {
+    "peak": null,
+    "anchor": null,
+    "triggered_session": false,
+    "last_trigger_time": null
+  },
+  "rule2": {
+    "base_equity": null,
+    "triggered_today": false,
+    "trigger_date": null
+  },
+  "last_bar_times": {
+    "EURUSD": {"m15": null, "h1": null, "entry": null, "context": null},
+    "GBPUSD": {"m15": null, "h1": null, "entry": null, "context": null},
+    "GBPJPY": {"m15": null, "h1": null, "entry": null, "context": null},
+    "AUDUSD": {"m15": null, "h1": null, "entry": null, "context": null}
+  },
+  "session_state": {
+    "EURUSD": {"session": null, "session_bar": -1},
+    "GBPUSD": {"session": null, "session_bar": -1},
+    "GBPJPY": {"session": null, "session_bar": -1},
+    "AUDUSD": {"session": null, "session_bar": -1}
+  },
+  "london_session_summary": {
+    "EURUSD": {"trades": 0, "wins": 0, "pnl_r": 0.0},
+    "GBPUSD": {"trades": 0, "wins": 0, "pnl_r": 0.0},
+    "GBPJPY": {"trades": 0, "wins": 0, "pnl_r": 0.0},
+    "AUDUSD": {"trades": 0, "wins": 0, "pnl_r": 0.0}
+  },
+  "ny_session_summary": {
+    "EURUSD": {"trades": 0, "wins": 0, "pnl_r": 0.0},
+    "GBPUSD": {"trades": 0, "wins": 0, "pnl_r": 0.0},
+    "GBPJPY": {"trades": 0, "wins": 0, "pnl_r": 0.0},
+    "AUDUSD": {"trades": 0, "wins": 0, "pnl_r": 0.0}
+  },
+  "_reset_log": []
+}

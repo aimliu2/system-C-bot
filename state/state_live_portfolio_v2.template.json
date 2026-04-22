@@ -1,0 +1,85 @@
+{
+  "_comment": "System C portfolio state v2 - live",
+  "_version": "2.0",
+  "deployment_id": "portfolio_option_a_202604",
+  "fresh_deployment": true,
+  "mode": "live",
+  "portfolio": {
+    "base_equity": null,
+    "peak_equity": null,
+    "rule2": {
+      "enabled": true,
+      "base_equity": null,
+      "triggered_today": false,
+      "trigger_date": null
+    },
+    "cb_anchor": {
+      "enabled": false,
+      "monitor_only": true,
+      "peak": null,
+      "anchor": null,
+      "would_trigger": false,
+      "last_would_trigger_time": null
+    },
+    "highwind": {
+      "enabled": false,
+      "monitor_only": true
+    },
+    "next_paper_ticket": -1,
+    "state_version": 0
+  },
+  "symbols": {
+    "AUDUSD": {
+      "mode": "live",
+      "engine_state": {},
+      "last_bar_times": {},
+      "session_state": {
+        "session": null,
+        "session_bar": -1
+      },
+      "session_summary": {},
+      "highwind_monitor_state": {}
+    },
+    "EURJPY": {
+      "mode": "live",
+      "engine_state": {},
+      "last_bar_times": {},
+      "session_state": {
+        "session": null,
+        "session_bar": -1
+      },
+      "session_summary": {},
+      "highwind_monitor_state": {}
+    },
+    "EURUSD": {
+      "mode": "live",
+      "engine_state": {},
+      "last_bar_times": {},
+      "session_state": {
+        "session": null,
+        "session_bar": -1
+      },
+      "session_summary": {},
+      "highwind_monitor_state": {}
+    },
+    "USDJPY": {
+      "mode": "live",
+      "engine_state": {},
+      "last_bar_times": {},
+      "session_state": {
+        "session": null,
+        "session_bar": -1
+      },
+      "session_summary": {},
+      "highwind_monitor_state": {}
+    }
+  },
+  "open_trades": [],
+  "diagnostics": {
+    "last_loop_id": null,
+    "last_snapshot_time": null,
+    "last_gps_status": "GRAY",
+    "last_invariant_status": null
+  },
+  "_reset_log": []
+}
