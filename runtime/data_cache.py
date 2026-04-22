@@ -48,8 +48,8 @@ def timeframe_duration(timeframe: str) -> pd.Timedelta:
     return pd.Timedelta(TIMEFRAME_DURATION[normalized])
 
 
-def rates_to_frame(rates: list[Any], timeframe: str) -> pd.DataFrame:
-    if not rates:
+def rates_to_frame(rates: Any, timeframe: str) -> pd.DataFrame:
+    if _rates_empty(rates):
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
     df = _rates_dataframe(rates)
     if "time" not in df.columns:
@@ -63,6 +63,15 @@ def rates_to_frame(rates: list[Any], timeframe: str) -> pd.DataFrame:
     df.index = close_time
     df.index.name = "bar_close_time"
     return df[["open", "high", "low", "close", "volume"]].sort_index()
+
+
+def _rates_empty(rates: Any) -> bool:
+    if rates is None:
+        return True
+    try:
+        return len(rates) == 0
+    except TypeError:
+        return False
 
 
 def _rates_dataframe(rates: Any) -> pd.DataFrame:

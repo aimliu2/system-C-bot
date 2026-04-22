@@ -8,6 +8,26 @@ from runtime.data_cache import rates_to_frame
 
 
 class RatesToFrameTests(unittest.TestCase):
+    def test_accepts_empty_mt5_structured_array(self) -> None:
+        rates = np.array(
+            [],
+            dtype=[
+                ("time", "i8"),
+                ("open", "f8"),
+                ("high", "f8"),
+                ("low", "f8"),
+                ("close", "f8"),
+                ("tick_volume", "i8"),
+                ("spread", "i4"),
+                ("real_volume", "i8"),
+            ],
+        )
+
+        frame = rates_to_frame(rates, "5m")
+
+        self.assertTrue(frame.empty)
+        self.assertEqual(list(frame.columns), ["open", "high", "low", "close", "volume"])
+
     def test_accepts_mt5_structured_array(self) -> None:
         rates = np.array(
             [(1770000000, 1.10, 1.11, 1.09, 1.105, 100, 2, 0)],
