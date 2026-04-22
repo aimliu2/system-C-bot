@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import redirect_stdout
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from io import StringIO
 from typing import Any
 from unittest.mock import patch
 
@@ -184,6 +186,46 @@ class ReconciliationTests(unittest.TestCase):
             and "deferred_watch=incremental_feature_rebuild" in event["detail"]
             for event in runner.logger.events
         ))
+
+    def test_market_data_stale_logs_after_threshold(self) -> None:
+        state = build_clean_state(self.cfg, "live")
+        state["diagnostics"]["last_entry_bar_update_time"] = (
+            datetime.now(timezone.utc) - timedelta(minutes=181)
+        ).isoformat()
+        runner = SequentialPortfolioRunner(self.cfg, FakeAdapter())
+        runner.logger = FakeLogger()
+        summary = type("Summary", (), {"entry_bar_updates": 0})()
+
+        output = StringIO()
+        with redirect_stdout(output):
+            runner._update_market_data_freshness(state, summary, "test-loop")
+
+        self.assertEqual(state["diagnostics"]["last_market_data_status"], "STALE")
+        self.assertIn("MARKET_DATA_STALE", output.getvalue())
+        self.assertTrue(any(event["event_type"] == "MARKET_DATA_STALE" for event in runner.logger.events))
+
+    def test_stale_market_uses_slow_poll_seconds(self) -> None:
+        state = build_clean_state(self.cfg, "live")
+        state["diagnostics"]["last_market_data_status"] = "STALE"
+        runner = SequentialPortfolioRunner(self.cfg, FakeAdapter())
+
+        self.assertEqual(runner._next_sleep_seconds(state), 60)
+
+    def test_market_data_resumed_returns_to_normal_poll(self) -> None:
+        state = build_clean_state(self.cfg, "live")
+        state["diagnostics"]["last_market_data_status"] = "STALE"
+        runner = SequentialPortfolioRunner(self.cfg, FakeAdapter())
+        runner.logger = FakeLogger()
+        summary = type("Summary", (), {"entry_bar_updates": 1})()
+
+        output = StringIO()
+        with redirect_stdout(output):
+            runner._update_market_data_freshness(state, summary, "test-loop")
+
+        self.assertEqual(state["diagnostics"]["last_market_data_status"], "OK")
+        self.assertEqual(runner._next_sleep_seconds(state), 5)
+        self.assertIn("MARKET_DATA_RESUMED", output.getvalue())
+        self.assertTrue(any(event["event_type"] == "MARKET_DATA_RESUMED" for event in runner.logger.events))
 
 
 if __name__ == "__main__":

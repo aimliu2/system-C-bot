@@ -12,6 +12,7 @@ from runtime.adapters import Mt5Adapter
 from runtime.config import RuntimeConfig
 
 
+MT5_RATE_COLUMNS = ("time", "open", "high", "low", "close", "tick_volume", "spread", "real_volume")
 TIMEFRAME_DURATION = {
     "1min": "1min",
     "1m": "1min",
@@ -50,9 +51,9 @@ def timeframe_duration(timeframe: str) -> pd.Timedelta:
 def rates_to_frame(rates: list[Any], timeframe: str) -> pd.DataFrame:
     if not rates:
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-    df = pd.DataFrame(rates)
+    df = _rates_dataframe(rates)
     if "time" not in df.columns:
-        raise ValueError("MT5 rates are missing time column")
+        raise ValueError(f"MT5 rates are missing time column; columns={list(df.columns)}")
     if "tick_volume" in df.columns and "volume" not in df.columns:
         df = df.rename(columns={"tick_volume": "volume"})
     if "volume" not in df.columns:
@@ -62,6 +63,19 @@ def rates_to_frame(rates: list[Any], timeframe: str) -> pd.DataFrame:
     df.index = close_time
     df.index.name = "bar_close_time"
     return df[["open", "high", "low", "close", "volume"]].sort_index()
+
+
+def _rates_dataframe(rates: Any) -> pd.DataFrame:
+    df = pd.DataFrame(rates)
+    if "time" in df.columns:
+        return df
+    dtype_names = getattr(getattr(rates, "dtype", None), "names", None)
+    if dtype_names:
+        return pd.DataFrame.from_records(rates, columns=list(dtype_names))
+    if len(df.columns) == len(MT5_RATE_COLUMNS):
+        df.columns = MT5_RATE_COLUMNS
+        return df
+    return df
 
 
 @dataclass

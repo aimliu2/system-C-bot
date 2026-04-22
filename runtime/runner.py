@@ -32,6 +32,7 @@ class LoopSummary:
     candidates: int = 0
     accepted: int = 0
     rejected: int = 0
+    entry_bar_updates: int = 0
 
 
 class SequentialPortfolioRunner:
@@ -45,6 +46,7 @@ class SequentialPortfolioRunner:
         self.reducer = PortfolioReducer(cfg)
         self.execution = ExecutionEngine(cfg, self.logger, adapter, state_saver=self.save_state)
         self.reconciler = BrokerReconciler(cfg, adapter) if adapter is not None else None
+        self._last_heartbeat_monotonic = 0.0
 
     def _state_mode(self) -> str:
         return "paper" if self.cfg.paper_mode else "live"
@@ -67,6 +69,7 @@ class SequentialPortfolioRunner:
         state = self.load_state()
         mode = self._state_mode()
         detail = f"adapter={self.adapter.name if self.adapter else 'none'} dry_run={self.dry_run} mode={mode}"
+        self._print_startup_banner(state)
         self.logger.ensure_headers()
         self.logger.event("BOT_STARTED", detail=detail)
         self._log_deferred_performance_modes()
@@ -74,15 +77,23 @@ class SequentialPortfolioRunner:
             self.adapter.connect()
             terminal = self.adapter.terminal_info()
             self.logger.event("MT5_CONNECTED", detail=str(terminal or {}))
+            print("MT5 connected", flush=True)
             updates = self.cache.warm_start(self.adapter)
+            warmed = sum(1 for update in updates if update.updated)
+            failed = len(updates) - warmed
             for update in updates:
                 event = "CACHE_WARMED" if update.updated else "CACHE_WARM_FAILED"
                 detail = f"timeframe={update.timeframe} rows={update.rows}"
                 if update.error:
                     detail = f"{detail} error={update.error}"
                 self.logger.event(event, symbol=update.symbol, detail=detail)
+                if update.error:
+                    print(f"CACHE warning {update.symbol} {update.timeframe}: {update.error}", flush=True)
+            print(f"Cache warmup complete: warmed={warmed} failed={failed}", flush=True)
         else:
             self.logger.event("DRY_RUN_NO_MT5", detail="adapter connection skipped")
+            print("DRY RUN: MT5 adapter connection skipped", flush=True)
+        print("Main loop started. Create STOP file to exit cleanly.", flush=True)
         return state
 
     def broker_snapshot(self) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
@@ -132,6 +143,8 @@ class SequentialPortfolioRunner:
 
             entry_timeframes = self._entry_timeframes(symbol)
             entry_updated = any(update.updated and update.timeframe in entry_timeframes for update in updates)
+            if entry_updated:
+                summary.entry_bar_updates += 1
             if not entry_updated:
                 summary.skipped_no_new_bar += 1
                 self.logger.event("SYMBOL_SKIPPED_NO_NEW_BAR", loop_id=loop_id, symbol=symbol)
@@ -217,6 +230,7 @@ class SequentialPortfolioRunner:
         state["diagnostics"]["last_snapshot_time"] = datetime.now(timezone.utc).isoformat()
         if not reconciliation_blocked:
             state["diagnostics"]["last_invariant_status"] = "OK"
+        self._update_market_data_freshness(state, summary, loop_id)
         state["portfolio"]["state_version"] = int(state["portfolio"].get("state_version", 0)) + 1
 
         self.logger.snapshot(
@@ -248,6 +262,15 @@ class SequentialPortfolioRunner:
         )
         self._maybe_write_gps(state, loop_id, force=reconciliation_closed)
         self.save_state(state)
+        self._print_heartbeat(
+            state,
+            summary,
+            loop_id=loop_id,
+            account=account,
+            broker_positions=broker_positions,
+            loop_duration_ms=loop_duration_ms,
+            reconciliation_blocked=reconciliation_blocked,
+        )
         return state
 
     def _reconcile_broker(self, state: dict[str, Any], broker_positions: list[dict[str, Any]], loop_id: str) -> bool:
@@ -359,6 +382,115 @@ class SequentialPortfolioRunner:
             ),
         )
 
+    def _update_market_data_freshness(self, state: dict[str, Any], summary: LoopSummary, loop_id: str) -> None:
+        diagnostics = state.setdefault("diagnostics", {})
+        now = datetime.now(timezone.utc)
+        if summary.entry_bar_updates > 0:
+            was_stale = diagnostics.get("last_market_data_status") == "STALE"
+            diagnostics["last_entry_bar_update_time"] = now.isoformat()
+            diagnostics["last_market_data_status"] = "OK"
+            diagnostics["last_market_data_stale_warning_time"] = None
+            diagnostics["last_market_data_stale_minutes"] = 0
+            if was_stale:
+                message = "MARKET_DATA_RESUMED closed entry bars are updating again; returning to normal poll"
+                print(message, flush=True)
+                self.logger.event("MARKET_DATA_RESUMED", loop_id=loop_id, detail=message)
+            return
+
+        last_update = _parse_utc(diagnostics.get("last_entry_bar_update_time"))
+        if last_update is None:
+            diagnostics["last_entry_bar_update_time"] = now.isoformat()
+            diagnostics["last_market_data_status"] = "UNKNOWN"
+            return
+
+        stale_minutes = int(self.cfg.raw.get("runtime", {}).get("market_data_stale_minutes", 180))
+        age_minutes = int((now - last_update).total_seconds() // 60)
+        if age_minutes < stale_minutes:
+            diagnostics["last_market_data_status"] = "OK"
+            return
+
+        heartbeat_seconds = int(self.cfg.raw.get("runtime", {}).get("heartbeat_minutes", 15)) * 60
+        last_warning = _parse_utc(diagnostics.get("last_market_data_stale_warning_time"))
+        should_emit = last_warning is None or (now - last_warning).total_seconds() >= heartbeat_seconds
+        diagnostics["last_market_data_status"] = "STALE"
+        diagnostics["last_market_data_stale_minutes"] = age_minutes
+        if should_emit:
+            message = (
+                f"MARKET_DATA_STALE no closed entry bars for {age_minutes} minutes; "
+                "possible holiday/weekend/feed issue"
+            )
+            print(message, flush=True)
+            self.logger.event("MARKET_DATA_STALE", loop_id=loop_id, detail=message)
+            diagnostics["last_market_data_stale_warning_time"] = now.isoformat()
+
+    def _next_sleep_seconds(self, state: dict[str, Any]) -> int:
+        runtime_cfg = self.cfg.raw.get("runtime", {})
+        if state.get("diagnostics", {}).get("last_market_data_status") == "STALE":
+            return int(runtime_cfg.get("market_data_stale_poll_seconds", 60))
+        return int(runtime_cfg.get("poll_interval_seconds", 5))
+
+    def _print_startup_banner(self, state: dict[str, Any]) -> None:
+        mode = self._state_mode().upper()
+        live_enabled = bool(self.cfg.raw.get("execution", {}).get("live_order_enabled", False))
+        notifications = self.cfg.raw.get("notifications", {})
+        print("", flush=True)
+        print("System C V2 bot", flush=True)
+        print("=" * 60, flush=True)
+        print(f"mode={mode} dry_run={self.dry_run}", flush=True)
+        print(f"deployment={self.cfg.deployment_id}", flush=True)
+        print(f"symbols={','.join(self.cfg.deployment_symbols)}", flush=True)
+        print(f"portfolio_cap={self.cfg.portfolio_cap} base_risk_pct={self.cfg.base_risk_pct}", flush=True)
+        print(f"live_order_enabled={live_enabled}", flush=True)
+        print(
+            "notifications="
+            f"enabled={bool(notifications.get('enabled', False))} "
+            f"paper={bool(notifications.get('paper_trades', False))} "
+            f"live={bool(notifications.get('live_trades', False))}",
+            flush=True,
+        )
+        print(f"state_file={self._state_path()}", flush=True)
+        print(f"open_trades={len(state.get('open_trades', []))}/{self.cfg.portfolio_cap}", flush=True)
+        print(f"kill_file={self.cfg.bot_dir / self.cfg.raw['runtime']['kill_file']}", flush=True)
+        print("=" * 60, flush=True)
+
+    def _print_heartbeat(
+        self,
+        state: dict[str, Any],
+        summary: LoopSummary,
+        *,
+        loop_id: str,
+        account: dict[str, Any] | None,
+        broker_positions: list[dict[str, Any]],
+        loop_duration_ms: int,
+        reconciliation_blocked: bool,
+    ) -> None:
+        interval = int(self.cfg.raw.get("runtime", {}).get("heartbeat_minutes", 15)) * 60
+        now_monotonic = time.monotonic()
+        if self._last_heartbeat_monotonic and now_monotonic - self._last_heartbeat_monotonic < interval:
+            return
+        self._last_heartbeat_monotonic = now_monotonic
+
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        equity = _fmt_money(_get_any(account, "equity")) if account else "N/A"
+        balance = _fmt_money(_get_any(account, "balance")) if account else "N/A"
+        diagnostics = state.get("diagnostics", {})
+        print(
+            (
+                f"[{now}] ALIVE loop={loop_id} mode={self._state_mode()} "
+                f"equity={equity} balance={balance} "
+                f"open={len(state.get('open_trades', []))}/{self.cfg.portfolio_cap} "
+                f"broker_positions={len(broker_positions)} "
+                f"evaluated={summary.evaluated_symbols} skipped_no_bar={summary.skipped_no_new_bar} "
+                f"candidates={summary.candidates} accepted={summary.accepted} rejected={summary.rejected} "
+                f"duration_ms={loop_duration_ms} "
+                f"invariant={diagnostics.get('last_invariant_status')} "
+                f"market_data={diagnostics.get('last_market_data_status')} "
+                f"gps={diagnostics.get('last_gps_status')} "
+                f"blocked={reconciliation_blocked}"
+            ),
+            flush=True,
+        )
+
     def _log_reconciliation(self, result: ReconciliationResult, loop_id: str) -> None:
         for row in result.close_rows:
             self.logger.trade(row)
@@ -457,7 +589,7 @@ class SequentialPortfolioRunner:
                 state = self.run_once(state)
                 if once:
                     break
-                time.sleep(int(self.cfg.raw["runtime"]["poll_interval_seconds"]))
+                time.sleep(self._next_sleep_seconds(state))
         finally:
             if self.adapter is not None and not self.dry_run:
                 self.adapter.close()
@@ -479,6 +611,21 @@ def _parse_utc(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _get_any(value: Any, key: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(key, default)
+    return getattr(value, key, default)
+
+
+def _fmt_money(value: Any) -> str:
+    try:
+        if value in (None, ""):
+            return "N/A"
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def build_common_parser(description: str) -> argparse.ArgumentParser:

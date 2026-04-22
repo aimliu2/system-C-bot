@@ -98,7 +98,7 @@ class NativeMt5Adapter:
 
     def copy_rates_from_pos(self, symbol: str, timeframe: Any, start_pos: int, count: int) -> list[Any]:
         rates = self.mt5.copy_rates_from_pos(symbol, timeframe, start_pos, count)
-        return list(rates) if rates is not None else []
+        return rates if rates is not None else []
 
     def order_send(self, request: dict[str, Any]) -> dict[str, Any]:
         return object_to_dict(self.mt5.order_send(request)) or {}
@@ -179,7 +179,7 @@ class RpycMt5Adapter:
     def copy_rates_from_pos(self, symbol: str, timeframe: Any, start_pos: int, count: int) -> list[Any]:
         rates = self.mt5.copy_rates_from_pos(symbol, timeframe, start_pos, count)
         materialized = self._materialize(rates)
-        return list(materialized) if materialized is not None else []
+        return materialized if materialized is not None else []
 
     def order_send(self, request: dict[str, Any]) -> dict[str, Any]:
         return object_to_dict(self._materialize(self.mt5.order_send(request))) or {}

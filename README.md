@@ -27,10 +27,12 @@ without `--dry-run`.
 - Portfolio reducer with portfolio cap and symbol cap checks.
 - Native MT5 and RPyC MT5 adapters.
 - Live order execution guarded by config.
+- Broker/state reconciliation before entries, including broker-side SL/TP/manual close detection.
 - V2 trade/event/signal/candidate/reducer/snapshot/timing/state-audit logs.
-- GPS reports for rolling portfolio health.
+- GPS reports for rolling portfolio health, written every 5 minutes or immediately after a broker close.
 - Telegram notification boundary for live trade opens.
 - Fresh V2 live and paper state files plus backup templates.
+- VPS console startup banner, ALIVE heartbeat, and market-data stale warning.
 
 ## Current Deployment
 
@@ -59,7 +61,7 @@ Current portfolio setup:
 
 ```text
 portfolio cap: 2 concurrent trades
-risk per trade: 0.4%
+risk per trade: 0.5%
 CB anchor: disabled, monitor-only
 Highwind: disabled, monitor-only
 Rule 2: enabled
@@ -108,8 +110,9 @@ monthly std:    11.86R
 Account-level drawdown translation from the portfolio deployment note:
 
 ```text
-0.4% risk/trade -> historical DD about 15.4%
-0.4% risk/trade with 2x stress -> about 30.8%
+0.4% risk/trade -> historical DD about 15.4% from the seed study
+0.5% risk/trade -> same 38.5R historical DD maps to about 19.25%
+0.5% risk/trade with 2x stress maps to about 38.5%
 ```
 
 GPS begins as `GRAY` because the new live deployment has no closed live trade
@@ -139,6 +142,17 @@ GREEN  live rolling shape remains inside guardrails
 YELLOW degraded versus interim seed guardrails, review soon
 RED    severe degradation, pause/reduce/stop and review
 ```
+
+GPS cadence:
+
+```text
+gps.loop_interval_seconds: 300
+gps.run_on_trade_close: true
+```
+
+The bot does not recompute GPS every 5-second trading loop. GPS is trade-log
+based, so it runs every 5 minutes and is forced immediately after broker
+reconciliation records a closed trade.
 
 ## Config Locations
 
@@ -256,6 +270,41 @@ bot/STOP
 
 The runner checks this file between loops.
 
+## Console Heartbeat And Stale Markets
+
+On startup, V2 prints a console banner with mode, deployment, symbols, risk,
+live-order gate, notification gate, state file, open trade count, and STOP file.
+
+During continuous runs, V2 prints an `ALIVE` heartbeat every
+`runtime.heartbeat_minutes`:
+
+```text
+runtime.poll_interval_seconds: 5
+runtime.heartbeat_minutes: 15
+```
+
+The 5-second poll controls MT5 closed-bar checks and signal detection. The
+15-minute heartbeat controls only terminal output. A 15-minute heartbeat does
+not make the bot miss 5-minute bars.
+
+Market-data stale behavior:
+
+```text
+runtime.market_data_stale_minutes: 180
+runtime.market_data_stale_poll_seconds: 60
+```
+
+If no deployed symbol produces a new closed entry bar for 180 minutes, V2 prints
+and logs:
+
+```text
+MARKET_DATA_STALE no closed entry bars for <minutes> minutes; possible holiday/weekend/feed issue
+```
+
+While stale, the outer poll sleep backs off from 5 seconds to 60 seconds. When a
+closed entry bar appears again, V2 prints/logs `MARKET_DATA_RESUMED` and returns
+to 5-second polling.
+
 ## Status And Performance Review
 
 Verify config and both V2 states:
@@ -305,6 +354,7 @@ event/signal/candidate/reducer/snapshot/timing/state-audit freshness
 GPS report file paths and freshness
 current interim conclusion
 review action suggestion
+GPS run/skip diagnostics
 ```
 
 To decide if the portfolio has degraded, check:
@@ -366,7 +416,11 @@ Live restore asks for confirmation.
 - V2 does not migrate old state.
 - V2 logs are a fresh deployment series under `logs/portfolio_option_a_202604/`.
 - CB and Highwind are not active controls in this launch.
+- Current live risk is `portfolio.base_risk_pct: 0.5`; the `gps.seed_baseline`
+  risk value remains historical metadata from the seed study.
 - `status.py` is observation-first. Legacy reset/highwind/rescale controls are
   intentionally unavailable in V2.
 - Live Telegram notification fires only after the trade state and trade log row
   are recorded.
+- Live state is persisted immediately after successful `order_send` and ticket
+  capture, before notification and nonessential logs.

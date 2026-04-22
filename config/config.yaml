@@ -49,6 +49,8 @@ logs:
 runtime:
   poll_interval_seconds: 5
   heartbeat_minutes: 15
+  market_data_stale_minutes: 180
+  market_data_stale_poll_seconds: 60
   kill_file: STOP
   parallel_symbol_eval: false
   max_symbol_workers: 4

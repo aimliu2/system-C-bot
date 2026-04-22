@@ -10,6 +10,7 @@ The runtime shape is sequential at the portfolio level:
 load config/state
 connect adapter
 warm closed-bar cache
+reconcile broker positions against state
 for each symbol:
   update closed bars
   rebuild features
@@ -17,7 +18,7 @@ for each symbol:
   stage proposed symbol state
 portfolio reducer accepts/rejects candidates
 execution opens paper/live trades sequentially
-state/logs/GPS/notifications update after decisions
+state/logs/GPS/notifications/console heartbeat update after decisions
 ```
 
 ## Main Flow
@@ -135,7 +136,7 @@ Responsibilities:
 
 ```text
 normalize timeframe labels
-convert MT5 rates to pandas frames indexed by bar close time
+convert native MT5 structured arrays or tuple rows to pandas frames indexed by bar close time
 drop forming bars
 warm 500+ bars on startup
 probe latest closed bar with 2 bars
@@ -148,6 +149,10 @@ The cache is intentionally in memory for launch:
 ```text
 data.cache.persist_to_disk: false
 ```
+
+The native MT5 VPS path returns numpy structured arrays from
+`copy_rates_from_pos`. `data_cache.py` preserves field names when present and
+can recover standard unnamed MT5 tuple rows using the known rate column order.
 
 ### `engine_bridge.py`
 
@@ -384,7 +389,8 @@ execute accepted entries
 commit staged symbol state
 update diagnostics
 write snapshot/timing/events
-write GPS reports
+write GPS reports when cadence is due or broker close happened
+print console startup/heartbeat/status messages
 save state atomically
 honor STOP kill file
 ```
@@ -431,6 +437,8 @@ The runtime uses closed-bar clocks:
 
 ```text
 minimum resolution: 1min
+poll interval: 5 seconds
+terminal heartbeat: 15 minutes
 indicator rebuild: on entry bar close
 entry decision: closed entry bar
 context merge: asof closed bar only
@@ -439,6 +447,31 @@ execution monitor: broker poll
 
 The data cache avoids future leak by using closed bars only and ignoring the
 forming bar.
+
+The 5-second poll is the signal-detection clock. The 15-minute heartbeat is only
+console output, so it does not delay 5-minute bar detection.
+
+Market-data stale behavior:
+
+```text
+market_data_stale_minutes: 180
+market_data_stale_poll_seconds: 60
+```
+
+If no deployed symbol produces a new closed entry bar for 180 minutes, the
+runner prints/logs `MARKET_DATA_STALE` and backs off loop sleep to 60 seconds.
+When a closed entry bar appears again, it prints/logs `MARKET_DATA_RESUMED` and
+returns to 5-second polling.
+
+GPS cadence:
+
+```text
+gps.loop_interval_seconds: 300
+gps.run_on_trade_close: true
+```
+
+GPS is trade-log based. It runs every 5 minutes and is forced immediately after
+broker reconciliation writes a closed trade row.
 
 ## Live Gates
 
@@ -454,6 +487,14 @@ notifications:
   enabled: true
   paper_trades: false
   live_trades: true
+```
+
+Current risk:
+
+```yaml
+portfolio:
+  max_concurrent_live_trades: 2
+  base_risk_pct: 0.5
 ```
 
 To shadow-test instead:
@@ -512,3 +553,5 @@ PYTHONDONTWRITEBYTECODE=1 python3 status.py --gps-check
 - Do not send Telegram notifications from symbol evaluation.
 - Do not include forming bars in decisions.
 - Do not migrate V1 state into V2 state.
+- Do not treat the GPS seed-baseline `base_risk_pct: 0.4` as live order risk;
+  live risk is `portfolio.base_risk_pct`.
