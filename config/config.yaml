@@ -71,6 +71,8 @@ notifications:
   enabled: true
   paper_trades: false
   live_trades: true
+  daily_status: true
+  daily_status_utc_hour: 7
 
 clocks:
   broker_poll_seconds_with_open_trades: 60

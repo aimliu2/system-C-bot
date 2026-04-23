@@ -30,7 +30,7 @@ without `--dry-run`.
 - Broker/state reconciliation before entries, including broker-side SL/TP/manual close detection.
 - V2 trade/event/signal/candidate/reducer/snapshot/timing/state-audit logs.
 - GPS reports for rolling portfolio health, written every 5 minutes or immediately after a broker close.
-- Telegram notification boundary for live trade opens.
+- Telegram notification boundary for live trade opens and a daily status update.
 - Fresh V2 live and paper state files plus backup templates.
 - VPS console startup banner, ALIVE heartbeat, and market-data stale warning.
 
@@ -80,6 +80,8 @@ notifications:
   enabled: true
   paper_trades: false
   live_trades: true
+  daily_status: true
+  daily_status_utc_hour: 7
 ```
 
 That means live order sending is armed. Paper/shadow mode is not the current
@@ -219,15 +221,30 @@ notifications:
   enabled: false
   paper_trades: false
   live_trades: true
+  daily_status: true
+  daily_status_utc_hour: 7
 ```
 
-To enable live trade-open notifications only:
+To enable live trade-open notifications and the daily London-open status update:
 
 ```yaml
 notifications:
   enabled: true
   paper_trades: false
   live_trades: true
+  daily_status: true
+  daily_status_utc_hour: 7
+```
+
+To disable the daily status update while keeping live trade-open notifications:
+
+```yaml
+notifications:
+  enabled: true
+  paper_trades: false
+  live_trades: true
+  daily_status: false
+  daily_status_utc_hour: 7
 ```
 
 To enable paper/shadow notifications too:
@@ -237,6 +254,8 @@ notifications:
   enabled: true
   paper_trades: true
   live_trades: true
+  daily_status: true
+  daily_status_utc_hour: 7
 ```
 
 ## Running The Bot
@@ -500,7 +519,11 @@ Live restore asks for confirmation.
   risk value remains historical metadata from the seed study.
 - `status.py` is observation-first. Legacy reset/highwind/rescale controls are
   intentionally unavailable in V2.
-- Live Telegram notification fires only after the trade state and trade log row
-  are recorded.
+- Live Telegram trade-open notification fires only after the trade state and
+  trade log row are recorded.
+- Daily Telegram status fires once per UTC day at or after
+  `notifications.daily_status_utc_hour`. It reports mode, deployment, symbols,
+  equity/balance, open trades, broker positions, market-data status, latest
+  entry bar, and GPS status. It intentionally excludes Highwind, Rule2, and CB.
 - Live state is persisted immediately after successful `order_send` and ticket
   capture, before notification and nonessential logs.

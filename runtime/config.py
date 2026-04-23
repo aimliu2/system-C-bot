@@ -180,6 +180,10 @@ class RuntimeConfig:
             return bool(notifications.get("live_trades", False))
         return False
 
+    def daily_status_notifications_enabled(self) -> bool:
+        notifications = self.raw.get("notifications") or {}
+        return bool(notifications.get("enabled", False) and notifications.get("daily_status", False))
+
 
 def resolve_bot_path(bot_dir: Path, value: str | Path) -> Path:
     path = Path(value)
@@ -306,6 +310,12 @@ def validate_runtime_config_shape(raw: dict[str, Any]) -> None:
             raise ConfigError(f"notifications.{key} is required")
         if not isinstance(notifications[key], bool):
             raise ConfigError(f"notifications.{key} must be boolean")
+    if "daily_status" in notifications and not isinstance(notifications["daily_status"], bool):
+        raise ConfigError("notifications.daily_status must be boolean")
+    if "daily_status_utc_hour" in notifications:
+        hour = int(notifications["daily_status_utc_hour"])
+        if not 0 <= hour <= 23:
+            raise ConfigError("notifications.daily_status_utc_hour must be 0..23")
 
 
 def verify_runtime_config(cfg: RuntimeConfig) -> None:
@@ -423,7 +433,9 @@ def sanitized_summary(cfg: RuntimeConfig) -> str:
             "notifications="
             f"enabled={cfg.raw['notifications']['enabled']},"
             f"paper_trades={cfg.raw['notifications']['paper_trades']},"
-            f"live_trades={cfg.raw['notifications']['live_trades']}"
+            f"live_trades={cfg.raw['notifications']['live_trades']},"
+            f"daily_status={cfg.raw['notifications'].get('daily_status', False)},"
+            f"daily_status_utc_hour={cfg.raw['notifications'].get('daily_status_utc_hour', 7)}"
         ),
     ]
     for symbol in cfg.deployment_symbols:

@@ -17,6 +17,7 @@ from runtime.engine_bridge import EngineBridge
 from runtime.execution import ExecutionEngine
 from runtime.gps import write_reports
 from runtime.logging import RuntimeLogger
+from runtime.notifications import RuntimeNotifier
 from runtime.portfolio import PortfolioReducer
 from runtime.reconciliation import BrokerReconciler, ReconciliationResult
 from runtime.state_store import atomic_write_json, load_state, validate_state_shape
@@ -46,6 +47,7 @@ class SequentialPortfolioRunner:
         self.engine = EngineBridge(cfg, self.cache)
         self.reducer = PortfolioReducer(cfg)
         self.execution = ExecutionEngine(cfg, self.logger, adapter, state_saver=self.save_state)
+        self.notifier = RuntimeNotifier(cfg, self.logger)
         self.reconciler = BrokerReconciler(cfg, adapter) if adapter is not None else None
         self._last_heartbeat_monotonic = 0.0
 
@@ -275,6 +277,12 @@ class SequentialPortfolioRunner:
             ),
         )
         self._maybe_write_gps(state, loop_id, force=reconciliation_closed)
+        self._maybe_send_daily_status(
+            state,
+            loop_id=loop_id,
+            account=account,
+            broker_positions=broker_positions,
+        )
         self.save_state(state)
         self._print_heartbeat(
             state,
@@ -360,6 +368,78 @@ class SequentialPortfolioRunner:
         except Exception as exc:
             diagnostics["last_gps_skip_reason"] = "failed"
             self.logger.event("GPS_REPORTS_FAILED", loop_id=loop_id, detail=str(exc))
+
+    def _maybe_send_daily_status(
+        self,
+        state: dict[str, Any],
+        *,
+        loop_id: str,
+        account: dict[str, Any] | None,
+        broker_positions: list[dict[str, Any]],
+        now: datetime | None = None,
+    ) -> None:
+        if self.dry_run or self.adapter is None:
+            return
+        if not self.cfg.daily_status_notifications_enabled():
+            return
+
+        now = now or datetime.now(timezone.utc)
+        notifications = self.cfg.raw.get("notifications", {})
+        send_hour = int(notifications.get("daily_status_utc_hour", 7))
+        if now.hour < send_hour:
+            return
+
+        diagnostics = state.setdefault("diagnostics", {})
+        today = now.date().isoformat()
+        if diagnostics.get("last_daily_status_date") == today:
+            return
+
+        payload = self._daily_status_payload(state, account, broker_positions, now=now)
+        sent = self.notifier.daily_status(payload)
+        diagnostics["last_daily_status_attempt_time"] = now.isoformat()
+        if sent:
+            diagnostics["last_daily_status_date"] = today
+            diagnostics["last_daily_status_time"] = now.isoformat()
+            self.logger.event("DAILY_STATUS_SENT", loop_id=loop_id, detail=f"date={today}")
+
+    def _daily_status_payload(
+        self,
+        state: dict[str, Any],
+        account: dict[str, Any] | None,
+        broker_positions: list[dict[str, Any]],
+        *,
+        now: datetime,
+    ) -> dict[str, Any]:
+        diagnostics = state.get("diagnostics", {})
+        return {
+            "date_utc": now.date().isoformat(),
+            "time_utc": now.strftime("%Y-%m-%d %H:%M"),
+            "mode": self._state_mode(),
+            "deployment": self.cfg.deployment_id,
+            "symbols": self.cfg.deployment_symbols,
+            "equity": _fmt_money(_get_any(account, "equity")) if account else "N/A",
+            "balance": _fmt_money(_get_any(account, "balance")) if account else "N/A",
+            "open_trades": len(state.get("open_trades", [])),
+            "portfolio_cap": self.cfg.portfolio_cap,
+            "broker_positions": len(broker_positions),
+            "market_data": diagnostics.get("last_market_data_status", "UNKNOWN"),
+            "latest_entry_bar": diagnostics.get("last_warmup_entry_bar_time")
+            or self._latest_state_bar_time(state)
+            or "N/A",
+            "gps": diagnostics.get("last_gps_status", "UNKNOWN"),
+        }
+
+    @staticmethod
+    def _latest_state_bar_time(state: dict[str, Any]) -> str:
+        latest: datetime | None = None
+        latest_text = ""
+        for symbol_state in (state.get("symbols") or {}).values():
+            for value in (symbol_state.get("last_bar_times") or {}).values():
+                parsed = _parse_utc(value)
+                if parsed is not None and (latest is None or parsed > latest):
+                    latest = parsed
+                    latest_text = parsed.isoformat()
+        return latest_text
 
     def _warn_if_slow(self, stage: str, duration_ms: int, *, loop_id: str, symbol: str = "") -> None:
         perf_cfg = self.cfg.raw.get("performance", {})
@@ -500,7 +580,8 @@ class SequentialPortfolioRunner:
             "notifications="
             f"enabled={bool(notifications.get('enabled', False))} "
             f"paper={bool(notifications.get('paper_trades', False))} "
-            f"live={bool(notifications.get('live_trades', False))}",
+            f"live={bool(notifications.get('live_trades', False))} "
+            f"daily={bool(notifications.get('daily_status', False))}",
             flush=True,
         )
         print(f"state_file={self._state_path()}", flush=True)

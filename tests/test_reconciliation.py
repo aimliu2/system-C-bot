@@ -46,6 +46,15 @@ class FakeLogger:
         self.events.append({"event_type": event_type, **kwargs})
 
 
+class FakeNotifier:
+    def __init__(self):
+        self.payloads: list[dict[str, Any]] = []
+
+    def daily_status(self, payload: dict[str, Any]) -> bool:
+        self.payloads.append(payload)
+        return True
+
+
 class ReconciliationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -232,6 +241,49 @@ class ReconciliationTests(unittest.TestCase):
         runner = SequentialPortfolioRunner(self.cfg, FakeAdapter())
 
         self.assertEqual(runner._next_sleep_seconds(state), 60)
+
+    def test_daily_status_sends_once_after_configured_hour(self) -> None:
+        state = build_clean_state(self.cfg, "live")
+        state["diagnostics"]["last_market_data_status"] = "OK"
+        runner = SequentialPortfolioRunner(self.cfg, FakeAdapter())
+        runner.logger = FakeLogger()
+        runner.notifier = FakeNotifier()
+        now = datetime(2026, 4, 23, 7, 5, tzinfo=timezone.utc)
+
+        runner._maybe_send_daily_status(
+            state,
+            loop_id="test-loop",
+            account={"equity": 10000.0, "balance": 10000.0},
+            broker_positions=[],
+            now=now,
+        )
+        runner._maybe_send_daily_status(
+            state,
+            loop_id="test-loop",
+            account={"equity": 10000.0, "balance": 10000.0},
+            broker_positions=[],
+            now=now + timedelta(minutes=5),
+        )
+
+        self.assertEqual(len(runner.notifier.payloads), 1)
+        self.assertEqual(state["diagnostics"]["last_daily_status_date"], "2026-04-23")
+        self.assertTrue(any(event["event_type"] == "DAILY_STATUS_SENT" for event in runner.logger.events))
+
+    def test_daily_status_skips_before_configured_hour(self) -> None:
+        state = build_clean_state(self.cfg, "live")
+        runner = SequentialPortfolioRunner(self.cfg, FakeAdapter())
+        runner.logger = FakeLogger()
+        runner.notifier = FakeNotifier()
+
+        runner._maybe_send_daily_status(
+            state,
+            loop_id="test-loop",
+            account={"equity": 10000.0, "balance": 10000.0},
+            broker_positions=[],
+            now=datetime(2026, 4, 23, 6, 59, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(runner.notifier.payloads, [])
 
     def test_market_data_resumed_returns_to_normal_poll(self) -> None:
         state = build_clean_state(self.cfg, "live")

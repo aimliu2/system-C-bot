@@ -391,11 +391,19 @@ notifications:
   enabled: true
   paper_trades: false
   live_trades: true
+  daily_status: true
+  daily_status_utc_hour: 7
 ```
 
-Execution calls notifications only after state and trade logs are updated.
-Live execution also persists state before the notification path, shrinking the
-order-send crash window.
+Execution calls trade-open notifications only after state and trade logs are
+updated. Live execution also persists state before the notification path,
+shrinking the order-send crash window.
+
+The runner sends one daily Telegram status update at or after
+`daily_status_utc_hour`. It is an alive/status message, not a trade event. It
+includes mode, deployment, symbols, account equity/balance, open trade count,
+broker position count, market-data status, latest entry bar, and GPS status.
+It intentionally excludes Highwind, Rule2, and CB.
 
 ### `runner.py`
 
@@ -531,6 +539,8 @@ notifications:
   enabled: true
   paper_trades: false
   live_trades: true
+  daily_status: true
+  daily_status_utc_hour: 7
 ```
 
 Current risk:
