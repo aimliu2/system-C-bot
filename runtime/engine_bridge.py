@@ -28,7 +28,7 @@ class SymbolEvalResult:
 
 
 def serialize_engine(engine: InstrumentEngine) -> dict[str, Any]:
-    return {
+    return json_safe({
         "snapshot": engine.snapshot(),
         "pivot_array": list(engine.pivot_array.pivots),
         "choch": {
@@ -50,7 +50,22 @@ def serialize_engine(engine: InstrumentEngine) -> dict[str, Any]:
         "episode_low": engine._episode_low,
         "episode_high_time": str(engine._episode_high_time) if engine._episode_high_time is not None else None,
         "episode_low_time": str(engine._episode_low_time) if engine._episode_low_time is not None else None,
-    }
+    })
+
+
+def json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    return value
 
 
 def hydrate_engine(engine: InstrumentEngine, payload: dict[str, Any] | None) -> InstrumentEngine:

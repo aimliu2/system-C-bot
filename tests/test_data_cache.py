@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
+import pandas as pd
 
 from runtime.data_cache import rates_to_frame
 from runtime.config import load_runtime_config
+from runtime.engine.config_loader import apply_phase_config, combo_config
+from runtime.engine.engine import InstrumentEngine
+from runtime.engine_bridge import serialize_engine
 from runtime.market_probe import MarketDataProbe
 
 
@@ -132,6 +137,28 @@ class MarketDataProbeTests(unittest.TestCase):
 
         self.assertEqual(row["status"], "OK")
         self.assertEqual(row["closed_count"], 1)
+
+
+class EngineSerializationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.cfg = load_runtime_config()
+
+    def test_engine_state_is_json_serializable_after_pivots(self) -> None:
+        symbol_cfg = self.cfg.symbols["EURUSD"].raw
+        engine_cfg = apply_phase_config(combo_config(symbol_cfg, "A1+A2+B"), "phase3")
+        engine = InstrumentEngine("EURUSD", engine_cfg)
+        timestamp = pd.Timestamp("2026-04-23T04:00:00+00:00")
+        engine.pivot_array.push("high", 1.1, timestamp)
+        engine.choch.set(direction=1, level=1.1, confirmed_time=timestamp)
+        engine._episode_high_time = timestamp
+        engine._episode_low_time = timestamp
+
+        payload = serialize_engine(engine)
+
+        json.dumps(payload)
+        self.assertEqual(payload["pivot_array"][0]["time"], "2026-04-23T04:00:00+00:00")
+        self.assertEqual(payload["snapshot"]["choch_confirmed_time"], "2026-04-23T04:00:00+00:00")
 
 
 if __name__ == "__main__":
