@@ -479,6 +479,13 @@ context merge: asof closed bar only
 execution monitor: broker poll
 ```
 
+The console heartbeat prints as `ALIVE_START` at the start of a due loop, after
+the broker snapshot and before reconciliation, cache refresh, symbol evaluation,
+GPS, notifications, state saves, and CSV logging. This makes the terminal a
+better liveness indicator than the old end-of-loop heartbeat: if the line stops,
+the runner is not even entering due loops, or the VPS/RDP console itself stopped
+updating.
+
 The data cache avoids future leak by using closed bars only and ignoring the
 forming bar. It requests MT5 bars from `start_pos=1`, then normalizes broker
 server timestamps to UTC using the detected broker offset. This avoids false
@@ -504,6 +511,12 @@ If no deployed symbol produces a new closed entry bar for 180 minutes, the
 runner prints/logs `MARKET_DATA_STALE` and backs off loop sleep to 60 seconds.
 When a closed entry bar appears again, it prints/logs `MARKET_DATA_RESUMED` and
 returns to 5-second polling.
+
+CSV log writes are best-effort for OS file-lock errors. On Windows VPS, copying
+an active CSV can make `Path.open(..., "a")` raise `PermissionError`. The runtime
+prints `LOG_WRITE_FAILED ...`, increments the in-memory logger failure count,
+and continues the loop. Schema mismatches still raise because they indicate an
+operator/config problem, not a temporary file lock.
 
 One-shot market-data probe:
 

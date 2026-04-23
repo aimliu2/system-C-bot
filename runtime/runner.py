@@ -124,6 +124,12 @@ class SequentialPortfolioRunner:
         loop_started = time.perf_counter()
         summary = LoopSummary(loop_id=loop_id)
         account, broker_positions = self.broker_snapshot()
+        self._print_heartbeat(
+            state,
+            loop_id=loop_id,
+            account=account,
+            broker_positions=broker_positions,
+        )
         candidates: list[dict[str, Any]] = []
         proposed_engine_states: dict[str, dict[str, Any]] = {}
         updated_bar_times: dict[str, dict[str, str]] = {}
@@ -284,15 +290,6 @@ class SequentialPortfolioRunner:
             broker_positions=broker_positions,
         )
         self.save_state(state)
-        self._print_heartbeat(
-            state,
-            summary,
-            loop_id=loop_id,
-            account=account,
-            broker_positions=broker_positions,
-            loop_duration_ms=loop_duration_ms,
-            reconciliation_blocked=reconciliation_blocked,
-        )
         return state
 
     def _reconcile_broker(self, state: dict[str, Any], broker_positions: list[dict[str, Any]], loop_id: str) -> bool:
@@ -592,13 +589,10 @@ class SequentialPortfolioRunner:
     def _print_heartbeat(
         self,
         state: dict[str, Any],
-        summary: LoopSummary,
         *,
         loop_id: str,
         account: dict[str, Any] | None,
         broker_positions: list[dict[str, Any]],
-        loop_duration_ms: int,
-        reconciliation_blocked: bool,
     ) -> None:
         interval = int(self.cfg.raw.get("runtime", {}).get("heartbeat_minutes", 15)) * 60
         now_monotonic = time.monotonic()
@@ -612,17 +606,16 @@ class SequentialPortfolioRunner:
         diagnostics = state.get("diagnostics", {})
         print(
             (
-                f"[{now}] ALIVE loop={loop_id} mode={self._state_mode()} "
+                f"[{now}] ALIVE_START loop={loop_id} mode={self._state_mode()} "
                 f"equity={equity} balance={balance} "
                 f"open={len(state.get('open_trades', []))}/{self.cfg.portfolio_cap} "
                 f"broker_positions={len(broker_positions)} "
-                f"evaluated={summary.evaluated_symbols} skipped_no_bar={summary.skipped_no_new_bar} "
-                f"candidates={summary.candidates} accepted={summary.accepted} rejected={summary.rejected} "
-                f"duration_ms={loop_duration_ms} "
+                f"last_loop={diagnostics.get('last_loop_id')} "
+                f"last_snapshot={diagnostics.get('last_snapshot_time')} "
                 f"invariant={diagnostics.get('last_invariant_status')} "
                 f"market_data={diagnostics.get('last_market_data_status')} "
                 f"gps={diagnostics.get('last_gps_status')} "
-                f"blocked={reconciliation_blocked}"
+                f"log_write_failures={self.logger.write_failures}"
             ),
             flush=True,
         )

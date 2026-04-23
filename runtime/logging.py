@@ -99,13 +99,25 @@ LOG_FIELDSETS = {
 class RuntimeLogger:
     def __init__(self, cfg: RuntimeConfig):
         self.cfg = cfg
+        self.write_failures = 0
+        self._last_write_failure = ""
 
     def _append(self, path: Path, fields: tuple[str, ...], row: dict[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._ensure_header(path, fields)
-        with path.open("a", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
-            writer.writerow({field: row.get(field, "") for field in fields})
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._ensure_header(path, fields)
+            with path.open("a", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+                writer.writerow({field: row.get(field, "") for field in fields})
+        except OSError as exc:
+            self._record_write_failure(path, exc)
+
+    def _record_write_failure(self, path: Path, exc: OSError) -> None:
+        self.write_failures += 1
+        message = f"LOG_WRITE_FAILED path={path} error={type(exc).__name__}: {exc}"
+        if message != self._last_write_failure:
+            print(message, flush=True)
+            self._last_write_failure = message
 
     def _ensure_header(self, path: Path, fields: tuple[str, ...]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,7 +137,10 @@ class RuntimeLogger:
     def ensure_headers(self) -> None:
         paths = self.cfg.get_log_paths()
         for label, fields in LOG_FIELDSETS.items():
-            self._ensure_header(paths[label], fields)
+            try:
+                self._ensure_header(paths[label], fields)
+            except OSError as exc:
+                self._record_write_failure(paths[label], exc)
 
     def event(self, event_type: str, *, loop_id: str = "", symbol: str = "", detail: str = "") -> None:
         path = self.cfg.get_log_paths()["event"]

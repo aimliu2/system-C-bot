@@ -5,10 +5,12 @@ from contextlib import redirect_stdout
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from io import StringIO
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 from runtime.config import load_runtime_config
+from runtime.logging import RuntimeLogger
 from runtime.reconciliation import BrokerReconciler
 from runtime.runner import SequentialPortfolioRunner
 from runtime.state_store import build_clean_state
@@ -53,6 +55,21 @@ class FakeNotifier:
     def daily_status(self, payload: dict[str, Any]) -> bool:
         self.payloads.append(payload)
         return True
+
+
+class FakeRuntimeLogConfig:
+    def get_log_paths(self) -> dict[str, Path]:
+        base = Path("/tmp/systemc-locked-logs")
+        return {
+            "event": base / "events.csv",
+            "snapshot": base / "snapshot.csv",
+            "signal": base / "signals.csv",
+            "candidate": base / "candidates.csv",
+            "reducer": base / "reducer.csv",
+            "trade": base / "trades.csv",
+            "timing": base / "timing.csv",
+            "state_audit": base / "state_audit.csv",
+        }
 
 
 class ReconciliationTests(unittest.TestCase):
@@ -300,6 +317,36 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(runner._next_sleep_seconds(state), 5)
         self.assertIn("MARKET_DATA_RESUMED", output.getvalue())
         self.assertTrue(any(event["event_type"] == "MARKET_DATA_RESUMED" for event in runner.logger.events))
+
+    def test_runtime_logger_permission_error_is_nonfatal(self) -> None:
+        logger = RuntimeLogger(FakeRuntimeLogConfig())  # type: ignore[arg-type]
+
+        output = StringIO()
+        with (
+            redirect_stdout(output),
+            patch("pathlib.Path.mkdir"),
+            patch("pathlib.Path.exists", return_value=False),
+            patch("pathlib.Path.open", side_effect=PermissionError("locked by copier")),
+        ):
+            logger.event("TEST_EVENT", loop_id="test-loop")
+
+        self.assertEqual(logger.write_failures, 1)
+        self.assertIn("LOG_WRITE_FAILED", output.getvalue())
+
+    def test_runtime_logger_header_permission_error_is_nonfatal(self) -> None:
+        logger = RuntimeLogger(FakeRuntimeLogConfig())  # type: ignore[arg-type]
+
+        output = StringIO()
+        with (
+            redirect_stdout(output),
+            patch("pathlib.Path.mkdir"),
+            patch("pathlib.Path.exists", return_value=False),
+            patch("pathlib.Path.open", side_effect=PermissionError("locked by copier")),
+        ):
+            logger.ensure_headers()
+
+        self.assertGreater(logger.write_failures, 0)
+        self.assertIn("LOG_WRITE_FAILED", output.getvalue())
 
 
 if __name__ == "__main__":

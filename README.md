@@ -352,8 +352,10 @@ The offset can be UTC+2 or UTC+3 depending on broker DST. V2 uses this offset to
 normalize MT5 bar timestamps back to UTC before session filters, feature
 alignment, candidate IDs, logs, and stale-market checks.
 
-During continuous runs, V2 prints an `ALIVE` heartbeat every
-`runtime.heartbeat_minutes`:
+During continuous runs, V2 prints an `ALIVE_START` heartbeat every
+`runtime.heartbeat_minutes`. The heartbeat is emitted at the start of a due loop,
+after the broker snapshot but before reconciliation, cache refresh, symbol
+evaluation, GPS, notifications, state saves, and CSV logging:
 
 ```text
 runtime.poll_interval_seconds: 5
@@ -362,7 +364,10 @@ runtime.heartbeat_minutes: 15
 
 The 5-second poll controls MT5 closed-bar checks and signal detection. The
 15-minute heartbeat controls only terminal output. A 15-minute heartbeat does
-not make the bot miss 5-minute bars.
+not make the bot miss 5-minute bars. If no `ALIVE_START` appears after the
+configured heartbeat interval plus a small VPS/RDP grace period, check
+`status.py` and the latest CSV timestamps. If those are also stale, assume the
+process is dead or hung before loop entry.
 
 Market-data stale behavior:
 
@@ -386,6 +391,19 @@ V2 does not infer closed bars by comparing broker timestamps directly to local
 UTC. The cache asks MT5 for `start_pos=1`, which is the latest closed bar, and
 normalizes broker-server timestamps by the detected offset. This avoids false
 stale states when the broker clock is UTC+2/UTC+3.
+
+## Copying Logs While The Bot Runs
+
+On Windows VPS, copying or syncing an active CSV can briefly lock the file. If
+that happens, V2 prints:
+
+```text
+LOG_WRITE_FAILED path=<log csv> error=PermissionError: ...
+```
+
+The logger treats OS file-lock errors as non-fatal, so trading continues. Any
+row attempted while the file is locked may be skipped. For an exact audit copy,
+use the STOP file first, wait for `BOT_STOPPED`, then copy the log folder.
 
 One-shot market-data probe:
 
