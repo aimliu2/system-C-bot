@@ -83,6 +83,17 @@ class ReconciliationTests(unittest.TestCase):
         reconciler = BrokerReconciler(self.cfg, adapter)
         return reconciler.reconcile(state, broker_positions=[])
 
+    def reconcile_with_offset(
+        self,
+        state: dict[str, Any],
+        history: dict[int, list[dict[str, Any]]],
+        offset_hours: int,
+    ):
+        adapter = FakeAdapter(history)
+        reconciler = BrokerReconciler(self.cfg, adapter)
+        reconciler.set_broker_utc_offset(offset_hours)
+        return reconciler.reconcile(state, broker_positions=[])
+
     def test_missing_broker_ticket_writes_close_row_and_clears_state(self) -> None:
         state = self.make_state(ticket=101)
 
@@ -109,6 +120,17 @@ class ReconciliationTests(unittest.TestCase):
 
         self.assertEqual(result.close_rows[0]["exit_reason"], "TP")
         self.assertGreater(float(result.close_rows[0]["r_result"]), 0.0)
+
+    def test_broker_server_close_time_is_normalized_to_utc(self) -> None:
+        state = self.make_state(ticket=203)
+
+        result = self.reconcile_with_offset(
+            state,
+            {203: self.deals(exit_price=1.1040, reason=FakeMt5.DEAL_REASON_TP)},
+            offset_hours=3,
+        )
+
+        self.assertEqual(result.close_rows[0]["close_time"], "2026-02-01T23:45:00+00:00")
 
     def test_broker_magic_ticket_missing_from_state_blocks_entries(self) -> None:
         state = build_clean_state(self.cfg, "live")

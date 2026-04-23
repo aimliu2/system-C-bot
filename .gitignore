@@ -7,6 +7,7 @@ start_bridge.sh
 logs/*
 state_live_portfolio_v2.json
 state_paper_portfolio_v2.json
+RDP
 
 # C extensions
 *.so

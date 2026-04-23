@@ -29,6 +29,7 @@ run_orders_vps.py / run_orders_rpyc.py
     -> runtime.config.load_runtime_config()
     -> runtime.state_store.load_state()
     -> runtime.adapters.NativeMt5Adapter or RpycMt5Adapter
+    -> runtime.broker_time.detect_broker_utc_offset()
     -> runtime.data_cache.BarCache
     -> runtime.engine_bridge.EngineBridge
     -> runtime.portfolio.PortfolioReducer
@@ -136,10 +137,11 @@ Responsibilities:
 
 ```text
 normalize timeframe labels
-convert native MT5 structured arrays or tuple rows to pandas frames indexed by bar close time
-drop forming bars
+convert native MT5 structured arrays or tuple rows to pandas frames indexed by UTC bar close time
+normalize broker-server timestamps by detected UTC offset
+request MT5 start_pos=1 so the forming bar is excluded
 warm 500+ bars on startup
-probe latest closed bar with 2 bars
+probe latest closed bar with closed-bar positions
 fetch closed-bar deltas with overlap
 retain bounded history per timeframe
 ```
@@ -150,9 +152,33 @@ The cache is intentionally in memory for launch:
 data.cache.persist_to_disk: false
 ```
 
+There is no persistent runtime bar cache to clear on deployment. Restarting the
+process rebuilds the cache from MT5. The state file persists diagnostics and open
+trades, but not the in-memory bar frames.
+
 The native MT5 VPS path returns numpy structured arrays from
 `copy_rates_from_pos`. `data_cache.py` preserves field names when present and
 can recover standard unnamed MT5 tuple rows using the known rate column order.
+
+### `broker_time.py`
+
+Detects the broker-server clock offset from UTC using the latest MT5 tick time.
+This matters because many MT5 brokers encode bar timestamps in server time
+instead of true UTC, and the server offset can switch between UTC+2 and UTC+3
+with DST.
+
+Responsibilities:
+
+```text
+read symbol_info_tick("EURUSD").time
+compare broker timestamp against wall-clock UTC
+round to an integer UTC offset
+log/print BROKER_TIME_OFFSET on startup
+feed the offset into BarCache timestamp normalization
+```
+
+The offset is a diagnostic and normalization input. Closed-bar selection still
+uses MT5 bar position, not local-clock filtering.
 
 ### `engine_bridge.py`
 
@@ -446,7 +472,15 @@ execution monitor: broker poll
 ```
 
 The data cache avoids future leak by using closed bars only and ignoring the
-forming bar.
+forming bar. It requests MT5 bars from `start_pos=1`, then normalizes broker
+server timestamps to UTC using the detected broker offset. This avoids false
+future-bar/stale behavior when the broker clock is UTC+2 or UTC+3.
+
+Startup prints/logs the detected offset:
+
+```text
+Broker UTC offset: UTC+3 (OK)
+```
 
 The 5-second poll is the signal-detection clock. The 15-minute heartbeat is only
 console output, so it does not delay 5-minute bar detection.
@@ -462,6 +496,16 @@ If no deployed symbol produces a new closed entry bar for 180 minutes, the
 runner prints/logs `MARKET_DATA_STALE` and backs off loop sleep to 60 seconds.
 When a closed entry bar appears again, it prints/logs `MARKET_DATA_RESUMED` and
 returns to 5-second polling.
+
+One-shot market-data probe:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 run_orders_vps.py --probe-market-data --probe-bars 20
+PYTHONDONTWRITEBYTECODE=1 python3 run_orders_rpyc.py --probe-market-data --probe-bars 20
+```
+
+The probe writes `market_probe_{YYYYMM}.csv` under the deployment log folder and
+does not mutate state, send orders, or notify.
 
 GPS cadence:
 

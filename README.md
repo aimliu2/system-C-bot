@@ -262,18 +262,76 @@ PYTHONDONTWRITEBYTECODE=1 python3 run_orders_vps.py --dry-run --once
 PYTHONDONTWRITEBYTECODE=1 python3 run_orders_rpyc.py --dry-run --once
 ```
 
-Stop a continuous runner by creating the kill file:
+Stop a continuous runner gracefully by creating the kill file from another
+terminal:
 
-```text
-bot/STOP
+```bash
+cd bot
+touch STOP
 ```
 
-The runner checks this file between loops.
+If running from outside the bot folder, use the full path:
+
+```bash
+touch /path/to/bot/STOP
+```
+
+Windows VPS PowerShell equivalent:
+
+```powershell
+New-Item -ItemType File -Path C:\SystemC\STOP -Force
+```
+
+If `New-Item` is unavailable or fails on Windows Server 2016, use:
+
+```powershell
+Set-Content -Path C:\SystemC\STOP -Value ""
+```
+
+or:
+
+```powershell
+"" | Out-File -FilePath C:\SystemC\STOP -Encoding ascii
+```
+
+Windows VPS `cmd.exe` equivalent:
+
+```bat
+type nul > C:\SystemC\STOP
+```
+
+or:
+
+```bat
+copy NUL C:\SystemC\STOP
+```
+
+Verify the file exists:
+
+```bat
+dir C:\SystemC\STOP
+```
+
+The `STOP` file must be created in the bot's actual working directory, the same
+folder as `run_orders_vps.py`.
+
+The runner checks this file between loops, logs `BOT_STOPPED`, exits the loop,
+and closes the MT5 adapter. This is preferred over `Ctrl+C` because it avoids
+interrupting an order, reconciliation, or state write mid-step.
 
 ## Console Heartbeat And Stale Markets
 
 On startup, V2 prints a console banner with mode, deployment, symbols, risk,
 live-order gate, notification gate, state file, open trade count, and STOP file.
+It also detects the MT5 broker-server clock offset from UTC, for example:
+
+```text
+Broker UTC offset: UTC+3 (OK)
+```
+
+The offset can be UTC+2 or UTC+3 depending on broker DST. V2 uses this offset to
+normalize MT5 bar timestamps back to UTC before session filters, feature
+alignment, candidate IDs, logs, and stale-market checks.
 
 During continuous runs, V2 prints an `ALIVE` heartbeat every
 `runtime.heartbeat_minutes`:
@@ -304,6 +362,28 @@ MARKET_DATA_STALE no closed entry bars for <minutes> minutes; possible holiday/w
 While stale, the outer poll sleep backs off from 5 seconds to 60 seconds. When a
 closed entry bar appears again, V2 prints/logs `MARKET_DATA_RESUMED` and returns
 to 5-second polling.
+
+V2 does not infer closed bars by comparing broker timestamps directly to local
+UTC. The cache asks MT5 for `start_pos=1`, which is the latest closed bar, and
+normalizes broker-server timestamps by the detected offset. This avoids false
+stale states when the broker clock is UTC+2/UTC+3.
+
+One-shot market-data probe:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 run_orders_vps.py --probe-market-data --probe-bars 20
+PYTHONDONTWRITEBYTECODE=1 python3 run_orders_rpyc.py --probe-market-data --probe-bars 20
+```
+
+The probe writes a separate file:
+
+```text
+logs/portfolio_option_a_202604/market_probe_202604.csv
+```
+
+Expected healthy result is mostly or entirely `OK`. `EMPTY_RATES` points to
+symbol/history/feed availability. `FUTURE_AFTER_OFFSET` means the detected
+broker offset did not fully explain the MT5 timestamps.
 
 ## Status And Performance Review
 

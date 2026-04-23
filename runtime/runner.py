@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from runtime.adapters import Mt5Adapter
+from runtime.broker_time import detect_broker_utc_offset
 from runtime.config import RuntimeConfig, load_runtime_config
 from runtime.data_cache import BarCache, CacheUpdate, normalize_timeframe
 from runtime.engine_bridge import EngineBridge
@@ -78,6 +79,17 @@ class SequentialPortfolioRunner:
             terminal = self.adapter.terminal_info()
             self.logger.event("MT5_CONNECTED", detail=str(terminal or {}))
             print("MT5 connected", flush=True)
+            offset = detect_broker_utc_offset(self.adapter)
+            self.cache.set_broker_utc_offset(offset.offset_hours)
+            if self.reconciler is not None:
+                self.reconciler.set_broker_utc_offset(offset.offset_hours)
+            offset_detail = (
+                f"offset_hours={offset.offset_hours} status={offset.status} "
+                f"source_symbol={offset.source_symbol} broker_time={offset.broker_time} "
+                f"utc_now={offset.utc_now} detail={offset.detail}"
+            )
+            self.logger.event("BROKER_TIME_OFFSET", detail=offset_detail)
+            print(f"Broker UTC offset: UTC{offset.offset_hours:+d} ({offset.status})", flush=True)
             updates = self.cache.warm_start(self.adapter)
             warmed = sum(1 for update in updates if update.updated)
             failed = len(updates) - warmed
@@ -90,6 +102,8 @@ class SequentialPortfolioRunner:
                 if update.error:
                     print(f"CACHE warning {update.symbol} {update.timeframe}: {update.error}", flush=True)
             print(f"Cache warmup complete: warmed={warmed} failed={failed}", flush=True)
+            if self._seed_market_data_freshness_from_warmup(state, updates):
+                self.save_state(state)
         else:
             self.logger.event("DRY_RUN_NO_MT5", detail="adapter connection skipped")
             print("DRY RUN: MT5 adapter connection skipped", flush=True)
@@ -423,6 +437,47 @@ class SequentialPortfolioRunner:
             self.logger.event("MARKET_DATA_STALE", loop_id=loop_id, detail=message)
             diagnostics["last_market_data_stale_warning_time"] = now.isoformat()
 
+    def _seed_market_data_freshness_from_warmup(self, state: dict[str, Any], updates: list[CacheUpdate]) -> bool:
+        latest_entry_bar: Any = None
+        for update in updates:
+            if update.error or update.latest_closed_bar is None:
+                continue
+            if update.timeframe not in self._entry_timeframes(update.symbol):
+                continue
+            candidate = pd_timestamp_to_utc(update.latest_closed_bar)
+            if candidate is not None and (latest_entry_bar is None or candidate > latest_entry_bar):
+                latest_entry_bar = candidate
+
+        if latest_entry_bar is None:
+            return False
+
+        now = datetime.now(timezone.utc)
+        stale_minutes = int(self.cfg.raw.get("runtime", {}).get("market_data_stale_minutes", 180))
+        age_minutes = int((now - latest_entry_bar).total_seconds() // 60)
+        if latest_entry_bar > now:
+            self.logger.event(
+                "MARKET_DATA_FUTURE_AFTER_OFFSET",
+                detail=f"latest={latest_entry_bar.isoformat()} now={now.isoformat()}",
+            )
+            return False
+        if age_minutes >= stale_minutes:
+            return False
+
+        diagnostics = state.setdefault("diagnostics", {})
+        changed = diagnostics.get("last_market_data_status") != "OK"
+        diagnostics["last_entry_bar_update_time"] = now.isoformat()
+        diagnostics["last_market_data_status"] = "OK"
+        diagnostics["last_market_data_stale_warning_time"] = None
+        diagnostics["last_market_data_stale_minutes"] = 0
+        diagnostics["last_warmup_entry_bar_time"] = latest_entry_bar.isoformat()
+        message = (
+            f"MARKET_DATA_RESUMED warmup found current closed entry bars; "
+            f"latest={latest_entry_bar.isoformat()} age_minutes={age_minutes}"
+        )
+        self.logger.event("MARKET_DATA_RESUMED", detail=message)
+        print(message, flush=True)
+        return changed
+
     def _next_sleep_seconds(self, state: dict[str, Any]) -> int:
         runtime_cfg = self.cfg.raw.get("runtime", {})
         if state.get("diagnostics", {}).get("last_market_data_status") == "STALE":
@@ -613,6 +668,16 @@ def _parse_utc(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def pd_timestamp_to_utc(value: Any) -> datetime | None:
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return _parse_utc(str(value))
+
+
 def _get_any(value: Any, key: str, default: Any = None) -> Any:
     if isinstance(value, dict):
         return value.get(key, default)
@@ -632,4 +697,15 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dry-run", action="store_true", help="skip MT5 connection and order execution")
     parser.add_argument("--once", action="store_true", help="run a single sequential loop")
+    parser.add_argument(
+        "--probe-market-data",
+        action="store_true",
+        help="connect to MT5, probe required symbol/timeframe bars, write a separate probe log, then exit",
+    )
+    parser.add_argument(
+        "--probe-bars",
+        type=int,
+        default=20,
+        help="number of latest MT5 bars to fetch per symbol/timeframe during --probe-market-data",
+    )
     return parser

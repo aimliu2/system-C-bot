@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from runtime.adapters import Mt5Adapter
@@ -27,6 +27,10 @@ class BrokerReconciler:
         self.cfg = cfg
         self.adapter = adapter
         self.mt5 = getattr(adapter, "mt5", None)
+        self.broker_utc_offset_hours = 0
+
+    def set_broker_utc_offset(self, offset_hours: int) -> None:
+        self.broker_utc_offset_hours = int(offset_hours)
 
     def reconcile(self, state: dict[str, Any], broker_positions: list[dict[str, Any]]) -> ReconciliationResult:
         result = ReconciliationResult()
@@ -110,7 +114,7 @@ class BrokerReconciler:
         return {
             "exit_reason": self._exit_reason(exit_deal),
             "exit_price": _float(_get(exit_deal, "price"), ""),
-            "close_time": _deal_time(exit_deal),
+            "close_time": _deal_time(exit_deal, broker_utc_offset_hours=self.broker_utc_offset_hours),
             "entry_price_hist": entry_price_hist,
             "history_error": "",
         }
@@ -216,14 +220,26 @@ def _const_int(mt5: Any, name: str) -> int | None:
     return _int(getattr(mt5, name, None))
 
 
-def _deal_time(deal: Any) -> str:
+def _deal_time(deal: Any, *, broker_utc_offset_hours: int = 0) -> str:
     time_msc = _int(_get(deal, "time_msc"))
     if time_msc:
-        return datetime.fromtimestamp(time_msc / 1000, tz=timezone.utc).isoformat()
+        return _normalize_broker_time(
+            datetime.fromtimestamp(time_msc / 1000, tz=timezone.utc),
+            broker_utc_offset_hours=broker_utc_offset_hours,
+        ).isoformat()
     timestamp = _int(_get(deal, "time"))
     if timestamp:
-        return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+        return _normalize_broker_time(
+            datetime.fromtimestamp(timestamp, tz=timezone.utc),
+            broker_utc_offset_hours=broker_utc_offset_hours,
+        ).isoformat()
     return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_broker_time(value: datetime, *, broker_utc_offset_hours: int = 0) -> datetime:
+    if not broker_utc_offset_hours:
+        return value
+    return value - timedelta(hours=broker_utc_offset_hours)
 
 
 def _r_result(direction: str, entry_price: float, exit_price: float, sl_price: float) -> float:

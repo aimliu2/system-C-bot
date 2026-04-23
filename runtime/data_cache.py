@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import timezone
 from typing import Any
 
 import pandas as pd
@@ -48,7 +47,7 @@ def timeframe_duration(timeframe: str) -> pd.Timedelta:
     return pd.Timedelta(TIMEFRAME_DURATION[normalized])
 
 
-def rates_to_frame(rates: Any, timeframe: str) -> pd.DataFrame:
+def rates_to_frame(rates: Any, timeframe: str, *, broker_utc_offset_hours: int = 0) -> pd.DataFrame:
     if _rates_empty(rates):
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
     df = _rates_dataframe(rates)
@@ -59,6 +58,8 @@ def rates_to_frame(rates: Any, timeframe: str) -> pd.DataFrame:
     if "volume" not in df.columns:
         df["volume"] = 0
     open_time = pd.to_datetime(df["time"], unit="s", utc=True)
+    if broker_utc_offset_hours:
+        open_time = open_time - pd.Timedelta(hours=broker_utc_offset_hours)
     close_time = open_time + timeframe_duration(timeframe)
     df.index = close_time
     df.index.name = "bar_close_time"
@@ -102,6 +103,7 @@ class BarCache:
     cfg: RuntimeConfig
     frames: dict[tuple[str, str], pd.DataFrame] = field(default_factory=dict)
     latest_closed: dict[tuple[str, str], pd.Timestamp] = field(default_factory=dict)
+    broker_utc_offset_hours: int = 0
 
     def required_timeframes(self, symbol: str) -> set[str]:
         sym_cfg = self.cfg.symbols[symbol]
@@ -137,13 +139,19 @@ class BarCache:
                 updates.append(self.fetch_full(adapter, symbol, timeframe, startup=True))
         return updates
 
+    def set_broker_utc_offset(self, offset_hours: int) -> None:
+        self.broker_utc_offset_hours = int(offset_hours)
+
     def fetch_full(self, adapter: Mt5Adapter, symbol: str, timeframe: str, *, startup: bool) -> CacheUpdate:
         normalized = normalize_timeframe(timeframe)
         count = self._bar_count(normalized, startup=startup)
         try:
-            rates = adapter.copy_rates_from_pos(symbol, adapter.timeframe_value(normalized), 0, count)
-            frame = rates_to_frame(rates, normalized)
-            frame = self._closed_only(frame)
+            rates = adapter.copy_rates_from_pos(symbol, adapter.timeframe_value(normalized), self._closed_start_pos(), count)
+            frame = rates_to_frame(
+                rates,
+                normalized,
+                broker_utc_offset_hours=self.broker_utc_offset_hours,
+            )
             self.frames[(symbol, normalized)] = frame.tail(self._retain_count(normalized))
             if not frame.empty:
                 self.latest_closed[(symbol, normalized)] = frame.index[-1]
@@ -154,9 +162,12 @@ class BarCache:
     def probe_latest_closed(self, adapter: Mt5Adapter, symbol: str, timeframe: str) -> pd.Timestamp | None:
         normalized = normalize_timeframe(timeframe)
         count = int(self.cfg.raw["data"]["cache"].get("latest_bar_probe_bars", 2))
-        rates = adapter.copy_rates_from_pos(symbol, adapter.timeframe_value(normalized), 0, count)
-        frame = rates_to_frame(rates, normalized)
-        frame = self._closed_only(frame)
+        rates = adapter.copy_rates_from_pos(symbol, adapter.timeframe_value(normalized), self._closed_start_pos(), count)
+        frame = rates_to_frame(
+            rates,
+            normalized,
+            broker_utc_offset_hours=self.broker_utc_offset_hours,
+        )
         if frame.empty:
             return None
         return frame.index[-1]
@@ -171,8 +182,12 @@ class BarCache:
             return CacheUpdate(symbol, normalized, False, latest, rows=len(self.frames.get(key, [])))
         overlap = int(self.cfg.raw["data"]["cache"].get("fetch_overlap_bars", 2))
         count = max(overlap + 2, 4)
-        rates = adapter.copy_rates_from_pos(symbol, adapter.timeframe_value(normalized), 0, count)
-        delta = self._closed_only(rates_to_frame(rates, normalized))
+        rates = adapter.copy_rates_from_pos(symbol, adapter.timeframe_value(normalized), self._closed_start_pos(), count)
+        delta = rates_to_frame(
+            rates,
+            normalized,
+            broker_utc_offset_hours=self.broker_utc_offset_hours,
+        )
         prior = self.frames.get(key, pd.DataFrame())
         combined = pd.concat([prior, delta]).sort_index()
         combined = combined[~combined.index.duplicated(keep="last")]
@@ -192,8 +207,5 @@ class BarCache:
         normalized = normalize_timeframe(timeframe)
         return int(self.cfg.raw["data"]["cache"]["max_retained_bars"].get(normalized, 600))
 
-    def _closed_only(self, frame: pd.DataFrame) -> pd.DataFrame:
-        if frame.empty:
-            return frame
-        now = pd.Timestamp.now(tz=timezone.utc)
-        return frame[frame.index <= now].copy()
+    def _closed_start_pos(self) -> int:
+        return 1 if self.cfg.raw["clocks"].get("latest_closed_bar_position") == "penultimate" else 0
