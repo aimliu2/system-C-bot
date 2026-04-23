@@ -103,17 +103,27 @@ class EngineBridge:
         self.cfg = cfg
         self.cache = cache
 
-    def evaluate_symbol(self, symbol: str, symbol_state: dict[str, Any]) -> SymbolEvalResult:
+    def evaluate_symbol(
+        self,
+        symbol: str,
+        symbol_state: dict[str, Any],
+        *,
+        due_entry_timeframes: set[str] | None = None,
+    ) -> SymbolEvalResult:
         sym_cfg = self.cfg.symbols[symbol]
         engine_state = symbol_state.setdefault("engine_state", {})
         branches = self._branch_specs(symbol)
         candidates = []
         proposed_state = deepcopy(engine_state)
+        processed_branches = 0
 
         for branch_key, hyp, phase_name, branch_cfg in branches:
             phase = branch_cfg["active_phase"]
             entry_tf = normalize_timeframe(phase["entry_timeframe"])
             context_tf = normalize_timeframe(phase["context_timeframe"])
+            if due_entry_timeframes is not None and entry_tf not in due_entry_timeframes:
+                continue
+            processed_branches += 1
             if not self.cache.has_frame(symbol, entry_tf) or not self.cache.has_frame(symbol, context_tf):
                 return SymbolEvalResult(symbol, False, reason=f"missing_cache:{entry_tf}/{context_tf}")
 
@@ -145,6 +155,9 @@ class EngineBridge:
                     "context_timeframe": context_tf,
                 })
                 candidates.append(candidate)
+
+        if processed_branches == 0:
+            return SymbolEvalResult(symbol, True, proposed_engine_state=proposed_state, reason="no_due_branch")
 
         if not candidates:
             return SymbolEvalResult(symbol, True, proposed_engine_state=proposed_state, reason="no_signal")

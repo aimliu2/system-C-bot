@@ -164,7 +164,12 @@ class SequentialPortfolioRunner:
                 continue
 
             entry_timeframes = self._entry_timeframes(symbol)
-            entry_updated = any(update.updated and update.timeframe in entry_timeframes for update in updates)
+            updated_entry_timeframes = {
+                update.timeframe
+                for update in updates
+                if update.updated and update.timeframe in entry_timeframes
+            }
+            entry_updated = bool(updated_entry_timeframes)
             if entry_updated:
                 summary.entry_bar_updates += 1
             if not entry_updated:
@@ -180,7 +185,11 @@ class SequentialPortfolioRunner:
             }
 
             try:
-                result = self.engine.evaluate_symbol(symbol, sym_state)
+                result = self.engine.evaluate_symbol(
+                    symbol,
+                    sym_state,
+                    due_entry_timeframes=updated_entry_timeframes,
+                )
             except Exception as exc:
                 summary.skipped_data_error += 1
                 self.logger.event("SYMBOL_EVAL_ERROR", loop_id=loop_id, symbol=symbol, detail=str(exc))

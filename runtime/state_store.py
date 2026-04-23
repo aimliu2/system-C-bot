@@ -52,6 +52,7 @@ def build_clean_state(cfg: RuntimeConfig, mode: str) -> dict[str, Any]:
             },
             "next_paper_ticket": -1,
             "state_version": 0,
+            "seen_candidate_ids": [],
         },
         "symbols": {
             symbol: {
