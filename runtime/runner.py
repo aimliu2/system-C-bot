@@ -146,7 +146,6 @@ class SequentialPortfolioRunner:
 
             if self.adapter is None or self.dry_run:
                 summary.skipped_no_new_bar += 1
-                self.logger.event("SYMBOL_SKIPPED_NO_NEW_BAR", loop_id=loop_id, symbol=symbol, detail="no MT5 adapter")
                 self._log_signal(loop_id, symbol, "not_due", "skipped", "no MT5 adapter")
                 continue
 
@@ -174,7 +173,6 @@ class SequentialPortfolioRunner:
                 summary.entry_bar_updates += 1
             if not entry_updated:
                 summary.skipped_no_new_bar += 1
-                self.logger.event("SYMBOL_SKIPPED_NO_NEW_BAR", loop_id=loop_id, symbol=symbol)
                 self._log_signal(loop_id, symbol, "not_due", "skipped", "no_new_closed_entry_bar")
                 continue
 
@@ -283,14 +281,6 @@ class SequentialPortfolioRunner:
             "detail": f"candidates={summary.candidates} accepted={summary.accepted} rejected={summary.rejected}",
         })
         self._warn_if_slow("portfolio_loop", loop_duration_ms, loop_id=loop_id)
-        self.logger.event(
-            "SNAPSHOT_OK",
-            loop_id=loop_id,
-            detail=(
-                f"account={bool(account)} broker_positions={len(broker_positions)} "
-                f"candidates={summary.candidates} accepted={summary.accepted} rejected={summary.rejected}"
-            ),
-        )
         self._maybe_write_gps(state, loop_id, force=reconciliation_closed)
         self._maybe_send_daily_status(
             state,
@@ -701,6 +691,8 @@ class SequentialPortfolioRunner:
         reason: str,
         candidate: dict[str, Any] | None = None,
     ) -> None:
+        if eval_status == "not_due":
+            return
         candidate = candidate or {}
         self.logger.signal({
             "loop_id": loop_id,

@@ -332,6 +332,17 @@ logs/portfolio_option_a_202604/
 `RuntimeLogger.ensure_headers()` creates header-only files so status checks can
 verify contracts before the first trade.
 
+Storage policy:
+
+- `trades`, `reducer`, `snapshot`, and `state_audit` stay as the primary trading
+  truth logs.
+- `events` logs state changes and important runtime transitions; it does not log
+  per-loop `SYMBOL_SKIPPED_NO_NEW_BAR`.
+- `signals` logs only real evaluations (`evaluated`, `not_ready`, `data_error`,
+  `candidate`) and skips `eval_status=not_due`.
+- Loop-level skipped/no-bar counts live in `snapshot` and console heartbeat
+  summaries instead of repeated event rows.
+
 ### `gps.py`
 
 Owns portfolio GPS report generation from closed trade rows.
